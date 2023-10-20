@@ -22,9 +22,9 @@ def test_flow_carbon_chain(root_directory):
     log_level=5,log_path=output+"/test.log",use_correction=False)
 
     negf_results = torch.load(output+"/results/negf.k0.out.pth")
-    trans = negf_results['TC'].numpy() 
-    assert(np.abs(trans[int(len(trans)/2)]-1)<1e-5)  #compare with calculated transmission at efermi
+    trans = negf_results['TC']
+    assert(abs(trans[int(len(trans)/2)]-1)<1e-5)  #compare with calculated transmission at efermi
 
 
-#还需要将不必要的文件删去
+
 
