@@ -46,12 +46,19 @@ class NNSKHost(PluginUser):
                 raise RuntimeError
             
             # jdata = j_loader(checkpoint)
+<<<<<<< HEAD
             if isinstance(config, dict):
                 jdata = config
             elif isinstance(config, str):
                 jdata = host_normalize(j_loader(config))
             else:
                 raise RuntimeError("config must be a dict or a str.")
+=======
+            if isinstance(config, str):
+                    jdata = host_normalize(j_loader(config))
+            else:
+                jdata = host_normalize(config)
+>>>>>>> cd351992bce1c3deb813dbb905ad8e5311580499
             #self.call_plugins(queue_name='disposable', time=0, **self.model_options, **self.common_options, **self.data_options, **self.run_opt)
 
             common_options = j_must_have(jdata, "common_options")
@@ -74,12 +81,21 @@ class NNSKHost(PluginUser):
                     log.error(msg="config is not set when init from json file.")
                     raise RuntimeError
             
+<<<<<<< HEAD
                 if isinstance(config, dict):
                     jdata = config
                 elif isinstance(config, str):
                     jdata = host_normalize(j_loader(config))
                 else:
                     raise RuntimeError("config must be a dict or a str.")
+=======
+                # jdata = j_loader(checkpoint)
+                if isinstance(config, str):
+                    jdata = host_normalize(j_loader(config))
+                else:
+                    jdata = host_normalize(config)
+                #self.call_plugins(queue_name='disposable', time=0, **self.model_options, **self.common_options, **self.data_options, **self.run_opt)
+>>>>>>> cd351992bce1c3deb813dbb905ad8e5311580499
 
                 common_options = j_must_have(jdata, "common_options")
                 model_options = j_must_have(jdata, "model_options")
