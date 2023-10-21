@@ -143,7 +143,7 @@
         }
     },
     "init_model": {
-        "path": "D:\\KnowledgeLibrary\\DeePTB\\DeePTB_git\\DeePTB\\dptb\\tests/data/test_negf/test_negf_run/nnsk_C.json",
+        "path": "D:\\KnowledgeLibrary\\DeePTB\\DeePTB_git\\DeePTB/dptb/tests/data/test_negf/test_negf_run/nnsk_C.json",
         "interpolate": false
     },
     "structure": null,

@@ -21,10 +21,10 @@ def root_directory(request):
 
 def test_negf_Hamiltonian(root_directory):
 
-    model_ckpt=root_directory +'/data/test_negf/test_negf_run/nnsk_C.json'
-    jdata = root_directory +"/data/test_negf/test_negf_hamiltonian/run_config.json"
-    structure=root_directory +"/data/test_negf/test_negf_run/chain.vasp"
-    log_path=root_directory +"/data/test_negf/test_negf_hamiltonian/test.log"
+    model_ckpt=root_directory +'/dptb/tests/data/test_negf/test_negf_run/nnsk_C.json'
+    jdata = root_directory +"/dptb/tests/data/test_negf/test_negf_hamiltonian/run_config.json"
+    structure=root_directory +"/dptb/tests/data/test_negf/test_negf_run/chain.vasp"
+    log_path=root_directory +"/dptb/tests/data/test_negf/test_negf_hamiltonian/test.log"
 
     apihost = NNSKHost(checkpoint=model_ckpt, config=jdata)
     apihost.register_plugin(InitSKModel())
@@ -36,7 +36,7 @@ def test_negf_Hamiltonian(root_directory):
     run_opt = {
             "run_sk": True,
             "init_model":model_ckpt,
-            "results_path":root_directory +"/data/test_negf/test_negf_hamiltonian/",
+            "results_path":root_directory +"/dptb/tests/data/test_negf/test_negf_hamiltonian/",
             "structure":structure,
             "log_path": log_path,
             "log_level": 5,
@@ -76,5 +76,17 @@ def test_negf_Hamiltonian(root_directory):
     assert leads_pbc.any()==True
     assert leads_cell.any()==True 
 
+    #check hs_device
+    hs_device = hamiltonian.get_hs_device(kpoint=np.array([0,0,0]),V=0,block_tridiagonal=False)[0][0]
+    hs_device_standard = torch.tensor([[-13.6386+0.j,   0.6096+0.j,   0.0000+0.j,   0.0000+0.j],
+        [  0.6096+0.j, -13.6386+0.j,   0.6096+0.j,   0.0000+0.j],
+        [  0.0000+0.j,   0.6096+0.j, -13.6386+0.j,   0.6096+0.j],
+        [  0.0000+0.j,   0.0000+0.j,   0.6096+0.j, -13.6386+0.j]],dtype=torch.complex128)
+    assert abs(hs_device-hs_device_standard).all()<1e-4
+
+    #check hs_lead
+    hs_lead = hamiltonian.get_hs_lead(kpoint=np.array([0,0,0]),tab="lead_L",v=0)[0][0]
+    hs_lead_standard = torch.tensor([-13.6386+0.j,   0.6096+0.j], dtype=torch.complex128)    
+    assert abs(hs_lead-hs_lead_standard).max()<1e-4
 
    

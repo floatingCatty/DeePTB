@@ -12,11 +12,11 @@ def root_directory(request):
 
 # NEGF calculaion in 1D carbon chain with zero-bias transmission 1 G0
 
-def test_flow_carbon_chain(root_directory):
-    INPUT_file =  root_directory +"/data/test_negf/test_negf_run/input_negf.json" 
-    output =  root_directory +"/data/test_negf/test_negf_run/out_negf"  
-    checkfile =  root_directory +'/data/test_negf/test_negf_run/nnsk_C.json'
-    structure =  root_directory +"/data/test_negf/test_negf_run/chain.vasp" 
+def test_negf_run(root_directory):
+    INPUT_file =  root_directory +"/dptb/tests/data/test_negf/test_negf_run/input_negf.json" 
+    output =  root_directory +"/dptb/tests/data/test_negf/test_negf_run/out_negf"  
+    checkfile =  root_directory +'/dptb/tests/data/test_negf/test_negf_run/nnsk_C.json'
+    structure =  root_directory +"/dptb/tests/data/test_negf/test_negf_run/chain.vasp" 
 
     run(INPUT=INPUT_file,init_model=checkfile,output=output,run_sk=True,structure=structure,\
     log_level=5,log_path=output+"/test.log",use_correction=False)
