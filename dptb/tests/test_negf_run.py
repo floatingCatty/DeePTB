@@ -1,7 +1,7 @@
 from dptb.entrypoints import run
 import pytest
 import torch
-import numpy as np
+
 
 @pytest.fixture(scope='session', autouse=True)
 def root_directory(request):
