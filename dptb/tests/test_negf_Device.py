@@ -156,6 +156,9 @@ def test_negf_Device(root_directory):
     assert device.green['gpu']== None
     assert device.green['gip_left']== None
 
+    Tc=device._cal_tc_()
+    assert abs(Tc-1)<1e-5
+
 
 
 
