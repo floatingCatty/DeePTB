@@ -110,6 +110,19 @@ def test_negf_Device(root_directory):
                 method=task_options["sgf_solver"]
                 )
 
+        # check left and right leads' self-energy
+    lead_L_se_standard=torch.tensor([[-3.3171e-07-0.6096j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j]], dtype=torch.complex128)
+    lead_R_se_standard=torch.tensor([[ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,0.0000e+00+0.0000j],
+        [ 0.0000e+00+0.0000j,  0.0000e+00+0.0000j,  0.0000e+00+0.0000j,-3.3171e-07-0.6096j]], dtype=torch.complex128)
+
+    assert  abs(device.lead_L.se-lead_L_se_standard).max()<1e-5
+    assert  abs(device.lead_R.se-lead_R_se_standard).max()<1e-5
+
     device.green_function(  e=torch.tensor([0]),   #calculate device green function at E=0
                             kpoint=kpoints[0], 
                             eta_device=task_options["eta_device"], 
