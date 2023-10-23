@@ -95,7 +95,7 @@ def test_negf_Device(root_directory):
     assert abs(device.mu+13.638587951660156)<1e-5
 
 
-
+    # calculate Self energy and Green function
     stru_options = j_must_have(task_options, "stru_options")
     leads = stru_options.keys()
     for ll in leads:
@@ -113,7 +113,7 @@ def test_negf_Device(root_directory):
                             block_tridiagonal=task_options["block_tridiagonal"]
                             )
 
-    #check device.green
+    #check calculated green functions' results
     assert list(device.green.keys())==['g_trans', 'grd', 'grl', 'gru', 'gr_left', 'gnd', 'gnl',\
                                         'gnu', 'gin_left', 'gpd', 'gpl', 'gpu', 'gip_left']
     g_trans= torch.tensor([[ 1.0983e-11-8.2022e-01j, -8.2022e-01+4.4634e-07j,8.9264e-07+8.2022e-01j,  8.2022e-01-1.3390e-06j],
