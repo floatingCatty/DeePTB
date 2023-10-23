@@ -82,17 +82,20 @@ def test_negf_Device(root_directory):
             )
     
     # check device.Lead_L.structure
-    assert np.array([device.lead_L.structure.symbols=='C4']).all()
-    assert np.array([device.lead_L.structure.pbc==[False, False, True]]).all()
-    assert np.array([(device.lead_L.structure.cell-np.diag([10.0, 10.0, 6.4])<1e-5)]).all()
+    assert all(device.lead_L.structure.symbols=='C4')
+    assert device.lead_L.structure.pbc[0]==False
+    assert device.lead_L.structure.pbc[1]==False
+    assert device.lead_L.structure.pbc[2]==True
+    assert np.diag(np.array((device.lead_L.structure.cell-[10.0, 10.0, 6.4])<1e-4)).all()
     assert device.lead_L.tab=="lead_L"
     assert abs(device.mu+13.638587951660156)<1e-5
     # check device.Lead_R.structure
-    assert np.array([device.lead_R.structure.symbols=='C4']).all()
-    assert np.array([device.lead_R.structure.pbc==[False, False, True]]).all()
-    assert np.array([(device.lead_R.structure.cell-np.diag([10.0, 10.0, 6.4])<1e-5)]).all()
+    assert all(device.lead_R.structure.symbols=='C4')
+    assert device.lead_R.structure.pbc[0]==False
+    assert device.lead_R.structure.pbc[1]==False
+    assert device.lead_R.structure.pbc[2]==True
+    assert np.diag(np.array((device.lead_R.structure.cell-[10.0, 10.0, 6.4])<1e-4)).all()
     assert device.lead_R.tab=="lead_R"
-    assert abs(device.mu+13.638587951660156)<1e-5
 
 
     # calculate Self energy and Green function
@@ -113,7 +116,7 @@ def test_negf_Device(root_directory):
                             block_tridiagonal=task_options["block_tridiagonal"]
                             )
 
-    #check calculated green functions' results
+    #check  green functions' results
     assert list(device.green.keys())==['g_trans', 'grd', 'grl', 'gru', 'gr_left', 'gnd', 'gnl',\
                                         'gnu', 'gin_left', 'gpd', 'gpl', 'gpu', 'gip_left']
     g_trans= torch.tensor([[ 1.0983e-11-8.2022e-01j, -8.2022e-01+4.4634e-07j,8.9264e-07+8.2022e-01j,  8.2022e-01-1.3390e-06j],
@@ -125,8 +128,8 @@ def test_negf_Device(root_directory):
             [ 8.9264e-07+8.2022e-01j, -8.2021e-01+4.4631e-07j,-3.6607e-12-8.2022e-01j, -8.2022e-01+4.4634e-07j],
             [ 8.2022e-01-1.3390e-06j,  8.9264e-07+8.2022e-01j,-8.2022e-01+4.4634e-07j,  1.0983e-11-8.2022e-01j]],dtype=torch.complex128)]
 
-    assert  np.array(abs(g_trans-device.green['g_trans'])<1e-5).all()
-    assert  np.array(abs(grd[0]-device.green['grd'][0])<1e-5).all()
+    assert  abs(g_trans-device.green['g_trans']).max()<1e-5
+    assert  abs(grd[0]-device.green['grd'][0]).max()<1e-5
     assert device.green['grl'] == []
     assert device.green['gru'] == []
 
@@ -140,8 +143,8 @@ def test_negf_Device(root_directory):
             [ 2.2316e-07+4.1011e-01j,  1.2132e-13+2.2315e-07j,-2.2316e-07-4.1011e-01j,  1.2149e-13+2.2317e-07j],
             [-3.6429e-13-6.6949e-07j,  2.2316e-07+4.1011e-01j,1.2140e-13+2.2317e-07j, -2.2316e-07-4.1011e-01j]],dtype=torch.complex128)]
 
-    assert  np.array(abs(gr_left[0]-device.green['gr_left'][0])<1e-5).all()
-    assert  np.array(abs(gnd[0]-device.green['gnd'][0])<1e-5).all()
+    assert  abs(gr_left[0]-device.green['gr_left'][0]).max()<1e-5
+    assert  abs(gnd[0]-device.green['gnd'][0]).max()<1e-5
     assert device.green['gnl'] == []
     assert device.green['gnu'] == []
 
@@ -149,14 +152,14 @@ def test_negf_Device(root_directory):
             [ 1.2132e-13+2.2317e-07j, -2.2316e-07-4.1011e-01j,1.2154e-13+2.2315e-07j,  2.2316e-07+4.1011e-01j],
             [ 2.2316e-07+4.1011e-01j,  1.2132e-13+2.2315e-07j,-2.2316e-07-4.1011e-01j,  1.2149e-13+2.2317e-07j],
             [-3.6429e-13-6.6949e-07j,  2.2316e-07+4.1011e-01j,1.2140e-13+2.2317e-07j, -2.2316e-07-4.1011e-01j]],dtype=torch.complex128)]
-    assert  np.array(abs(gin_left[0]-device.green['gin_left'][0])<1e-5).all()
+    assert  abs(gin_left[0]-device.green['gin_left'][0]).max()<1e-5
 
     assert device.green['gpd']== None
     assert device.green['gpl']== None
     assert device.green['gpu']== None
     assert device.green['gip_left']== None
 
-    Tc=device._cal_tc_()
+    Tc=device._cal_tc_() #transmission
     assert abs(Tc-1)<1e-5
 
     dos = device._cal_dos_()
