@@ -159,6 +159,13 @@ def test_negf_Device(root_directory):
     Tc=device._cal_tc_()
     assert abs(Tc-1)<1e-5
 
+    dos = device._cal_dos_()
+    dos_standard = torch.tensor(2.0887, dtype=torch.float64)
+    assert abs(dos-dos_standard)<1e-4
+
+    ldos = device._cal_ldos_()
+    ldos_standard = torch.tensor([0.2611, 0.2611, 0.2611, 0.2611], dtype=torch.float64)
+    assert abs(ldos_standard-ldos).max()<1e-4
 
 
 
