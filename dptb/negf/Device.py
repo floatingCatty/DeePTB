@@ -178,7 +178,7 @@ class Device(object):
 
         # check the energy grid satisfied the requirement
         
-        na = len(self.norbs_per_atom)
+        na = len(self.norbs_per_atom) # a list: length=number of atoms in device, components are number of orbitals in per atom.
         local_current = torch.zeros(na, na)
         hd = self.hamiltonian.get_hs_device(kpoint=self.kpoint, V=self.V, block_tridiagonal=self.block_tridiagonal)[0][0]
 

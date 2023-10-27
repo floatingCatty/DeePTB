@@ -14,7 +14,7 @@
         "ref_band": null
     },
     "init_model": {
-        "path": "/root/deeptb/dptb/tests/data/hBN/checkpoint/best_dptb.pth",
+        "path": "D:\\KnowledgeLibrary\\DeePTB\\DeePTB_git\\DeePTB/dptb/tests/data/hBN/checkpoint/best_dptb.pth",
         "interpolate": false
     },
     "use_correction": null
