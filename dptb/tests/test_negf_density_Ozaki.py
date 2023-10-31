@@ -27,7 +27,7 @@ def root_directory(request):
 def test_negf_density_Ozaki(root_directory):
 
     model_ckpt=root_directory +'/dptb/tests/data/test_negf/test_negf_run/nnsk_C.json'
-    jdata = root_directory +"/dptb/tests/data/test_negf/test_negf_hamiltonian/run_config.json"
+    jdata = root_directory +"/dptb/tests/data/test_negf/test_negf_hamiltonian/run_input.json"
     structure=root_directory +"/dptb/tests/data/test_negf/test_negf_run/chain.vasp"
     log_path=root_directory +"/dptb/tests/data/test_negf/test_negf_Device/test.log"
 
