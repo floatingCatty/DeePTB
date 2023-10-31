@@ -51,11 +51,6 @@
             "sk_cutoff": 4.0,
             "sk_decay_w": 0.3
         },
-        "onsitefuncion": {
-            "onsite_func_cutoff": 6.0,
-            "onsite_func_decay_w": 0.5,
-            "onsite_func_lambda": 1.0
-        },
         "dptb": {
             "soc_env": false,
             "axis_neuron": 10,
