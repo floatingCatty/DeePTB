@@ -31,7 +31,6 @@
         "sk_file_path": "./",
         "time_symm": true,
         "soc": false,
-        "overlap": false,
         "unit": "Hartree"
     },
     "data_options": {
