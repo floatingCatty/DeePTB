@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dptb.utils.constants import atomic_num_dict, anglrMId, SKBondType
+from dptb.data import _keys
 from dptb.nnsktb.onsiteDB import onsite_energy_database
 from typing import (
     TYPE_CHECKING,
@@ -759,7 +760,80 @@ def extract_zip(path, folder, log=True):
     with zipfile.ZipFile(path, "r") as f:
         f.extractall(folder)
 
+def ham_block_to_feature(data, idp, Hamiltonian_blocks: str):
+    onsite_ham = []
+    edge_ham = []
 
+    idp.get_orbital_maps()
+    idp.get_node_maps()
+    idp.get_pair_maps()
+
+    atomic_numbers = data[_keys.ATOMIC_NUMBERS_KEY]
+    Ham_blocks = np.load(Hamiltonian_blocks)
+
+    # onsite features
+    for atom in range(len(atomic_numbers)):
+        block_index = '_'.join(map(str, map(int, [atom+1, atom+1] + list([0, 0, 0]))))
+        try:
+            block = Ham_blocks[block_index]
+        except:
+            raise IndexError("Hamiltonian block for onsite not found, check Hamiltonian file.")
+
+        symbol = ase.data.chemical_symbols[atomic_numbers[atom]]
+        basis_list = idp.basis[symbol]
+        onsite_out = np.zeros(idp.node_reduced_matrix_element)
+
+        for index, basis_i in enumerate(basis_list):
+            slice_i = idp.orbital_maps[symbol][basis_i]  
+            for basis_j in basis_list[index:-1]:
+                slice_j = idp.orbital_maps[symbol][basis_j]
+                block_ij = block[slice_i, slice_j]
+                full_basis_i = idp.basis_to_full_basis[symbol][basis_i]
+                full_basis_j = idp.basis_to_full_basis[symbol][basis_j]
+
+                # fill onsite vector
+                pair_ij = full_basis_i + "-" + full_basis_j
+                feature_slice = idp.node_maps[pair_ij]
+                onsite_out[feature_slice] = block_ij.flatten()
+
+        onsite_ham.append(onsite_out)
+        #onsite_ham = np.array(onsite_ham)
+
+    # edge features
+    edge_index = data[_keys.EDGE_INDEX_KEY]
+    edge_cell_shift = data[_keys.EDGE_CELL_SHIFT_KEY]
+
+    for atom_i, atom_j, R_shift in zip(edge_index[0], edge_index[1], edge_cell_shift):
+        block_index = '_'.join(map(str, map(int, [atom_i+1, atom_j+1] + list(R_shift))))
+        try:
+            block = Ham_blocks[block_index]
+        except:
+            raise IndexError("Hamiltonian block for hopping not found, r_cut may be too big for input R.")
+
+        symbol_i = ase.data.chemical_symbols[atomic_numbers[atom_i]]
+        symbol_j = ase.data.chemical_symbols[atomic_numbers[atom_j]]
+        basis_i_list = idp.basis[symbol_i]
+        basis_j_list = idp.basis[symbol_j]
+        hopping_out = np.zeros(idp.edge_reduced_matrix_element)
+
+        for basis_i in basis_i_list:
+            slice_i = idp.orbital_maps[symbol_i][basis_i]
+            for basis_j in basis_j_list:
+                slice_j = idp.orbital_maps[symbol_j][basis_j]
+                block_ij = block[slice_i, slice_j]
+                full_basis_i = idp.basis_to_full_basis[symbol_i][basis_i]
+                full_basis_j = idp.basis_to_full_basis[symbol_j][basis_j]
+
+                # fill hopping vector
+                pair_ij = full_basis_i + "-" + full_basis_j
+                feature_slice = idp.pair_maps[pair_ij]
+                hopping_out[feature_slice] = block_ij.flatten()
+
+        edge_ham.append(hopping_out)
+        #edge_ham = np.array(edge_ham)
+
+    data[_keys.NODE_FEATURES_KEY] = torch.as_tensor(np.array(onsite_ham), dtype=torch.get_default_dtype())
+    data[_keys.EDGE_FEATURES_KEY] = torch.as_tensor(np.array(edge_ham), dtype=torch.get_default_dtype())
 
 if __name__ == '__main__':
     print(get_neuron_config(nl=[0,1,2,3,4,5,6,7]))

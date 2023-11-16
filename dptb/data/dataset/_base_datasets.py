@@ -12,7 +12,7 @@ import torch
 from torch_runstats.scatter import scatter_std, scatter_mean
 
 from dptb.utils.torch_geometric import Batch, Dataset
-from dptb.utils.tools import download_url, extract_zip
+from dptb.utils.tools import download_url, extract_zip, ham_block_to_feature
 
 import dptb
 from dptb.data import (
@@ -124,6 +124,7 @@ class AtomicInMemoryDataset(AtomicDataset):
         AtomicData_options: Dict[str, Any] = {},
         include_frames: Optional[List[int]] = None,
         type_mapper: Optional[TypeMapper] = None,
+        orbital_mapper: Optional[TypeMapper] = None,
     ):
         # TO DO, this may be simplified
         # See if a subclass defines some inputs
@@ -136,6 +137,9 @@ class AtomicInMemoryDataset(AtomicDataset):
         self.include_frames = include_frames
 
         self.data = None
+
+        if orbital_mapper is not None:
+            self.orbital_mapper = orbital_mapper
 
         # !!! don't delete this block.
         # otherwise the inherent children class
@@ -252,6 +256,15 @@ class AtomicInMemoryDataset(AtomicDataset):
                 )
                 for i in include_frames
             ]
+
+            if fields["Hamiltonian_blocks"] is not None:
+                for i, data in enumerate(data_list):
+                    ham_block_to_feature(data, 
+                                         self.orbital_mapper, 
+                                         fields["Hamiltonian_blocks"][i])
+                    
+            print("Finished loading Hamiltonian blocks.")
+            print(f"We have data in data_list: {type(data_list[0])}")
 
         else:
             raise ValueError("Invalid return from `self.get_data()`")
