@@ -257,14 +257,6 @@ class AtomicInMemoryDataset(AtomicDataset):
                 for i in include_frames
             ]
 
-            if fields["Hamiltonian_blocks"] is not None:
-                for i, data in enumerate(data_list):
-                    ham_block_to_feature(data, 
-                                         self.orbital_mapper, 
-                                         fields["Hamiltonian_blocks"][i])
-                    
-            print("Finished loading Hamiltonian blocks.")
-            print(f"We have data in data_list: {type(data_list[0])}")
 
         else:
             raise ValueError("Invalid return from `self.get_data()`")

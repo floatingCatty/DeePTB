@@ -760,7 +760,8 @@ def extract_zip(path, folder, log=True):
     with zipfile.ZipFile(path, "r") as f:
         f.extractall(folder)
 
-def ham_block_to_feature(data, idp, Hamiltonian_blocks: str):
+def ham_block_to_feature(data, idp, Hamiltonian_blocks): 
+    # Hamiltonian_blocks should be a h5 group in the current version
     onsite_ham = []
     edge_ham = []
 
@@ -769,13 +770,12 @@ def ham_block_to_feature(data, idp, Hamiltonian_blocks: str):
     idp.get_pair_maps()
 
     atomic_numbers = data[_keys.ATOMIC_NUMBERS_KEY]
-    Ham_blocks = np.load(Hamiltonian_blocks)
 
     # onsite features
     for atom in range(len(atomic_numbers)):
         block_index = '_'.join(map(str, map(int, [atom+1, atom+1] + list([0, 0, 0]))))
         try:
-            block = Ham_blocks[block_index]
+            block = Hamiltonian_blocks[block_index]
         except:
             raise IndexError("Hamiltonian block for onsite not found, check Hamiltonian file.")
 
@@ -785,7 +785,7 @@ def ham_block_to_feature(data, idp, Hamiltonian_blocks: str):
 
         for index, basis_i in enumerate(basis_list):
             slice_i = idp.orbital_maps[symbol][basis_i]  
-            for basis_j in basis_list[index:-1]:
+            for basis_j in basis_list[index:]:
                 slice_j = idp.orbital_maps[symbol][basis_j]
                 block_ij = block[slice_i, slice_j]
                 full_basis_i = idp.basis_to_full_basis[symbol][basis_i]
@@ -806,7 +806,7 @@ def ham_block_to_feature(data, idp, Hamiltonian_blocks: str):
     for atom_i, atom_j, R_shift in zip(edge_index[0], edge_index[1], edge_cell_shift):
         block_index = '_'.join(map(str, map(int, [atom_i+1, atom_j+1] + list(R_shift))))
         try:
-            block = Ham_blocks[block_index]
+            block = Hamiltonian_blocks[block_index]
         except:
             raise IndexError("Hamiltonian block for hopping not found, r_cut may be too big for input R.")
 
