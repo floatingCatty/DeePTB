@@ -12,7 +12,7 @@ import torch
 from torch_runstats.scatter import scatter_std, scatter_mean
 
 from dptb.utils.torch_geometric import Batch, Dataset
-from dptb.utils.tools import download_url, extract_zip, ham_block_to_feature
+from dptb.utils.tools import download_url, extract_zip
 
 import dptb
 from dptb.data import (
