@@ -67,7 +67,7 @@ class ABACUSDataset(AtomicDataset):
             for key, value in data["basis"].items(): 
                 basis[key] = [(f"{i+1}" + orbitalLId[l]) for i, l in enumerate(value)]
             idp = OrbitalMapper(basis)
-            ham_block_to_feature(atomic_data, idp, data["hamiltonian_blocks"])
+            ham_block_to_feature(atomic_data, idp, data["hamiltonian_blocks"], data["overlap_blocks"])
         if data["eigenvalue"] and data["kpoint"]:
             atomic_data[AtomicDataDict.KPOINT_KEY] = torch.as_tensor(data["kpoint"][:], dtype=torch.get_default_dtype())
             atomic_data[AtomicDataDict.ENERGY_EIGENVALUE_KEY] = torch.as_tensor(data["eigenvalue"][:], dtype=torch.get_default_dtype())

@@ -6,11 +6,11 @@ import os
 import sys
 import json
 import re
+from collections import Counter
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.linalg import block_diag
-import argparse
 import h5py
 import ase
 
@@ -48,7 +48,8 @@ def abacus_parse(input_path,
                  output_path, 
                  data_name, 
                  only_S=False, 
-                 get_Ham=False, 
+                 get_Ham=False,
+                 add_overlap=False, 
                  get_eigenvalues=False):
     
     input_path = os.path.abspath(input_path)
@@ -165,11 +166,15 @@ def abacus_parse(input_path,
         json.dump(info, info_f)
     with open(os.path.join(output_path, "basis.dat"), 'w') as f:
         for atomic_number in element:
-            for index_l, l in enumerate(orbital_types_dict[atomic_number]):
+            counter = Counter(orbital_types_dict[atomic_number])
+            num_orbs = [counter[i] for i in range(4)] # s, p, d, f
+            for index_l, l in enumerate(num_orbs):
+                if l == 0:  # no this orbit
+                    continue
                 if index_l == 0:
-                    f.write(str(orbitalId[l]))
+                    f.write(f"{l}{orbitalId[index_l]}")
                 else:
-                    f.write(f"  {orbitalId[l]}")
+                    f.write(f"{l}{orbitalId[index_l]}")
             f.write('\n')
     atomic_basis = {}
     for atomic_number, orbitals in orbital_types_dict.items():
@@ -288,7 +293,10 @@ def abacus_parse(input_path,
             basis[key] = value
         if get_Ham:
             f["hamiltonian_blocks"] = h5py.ExternalLink("hamiltonians.h5", "/")
-            f["overlap_blocks"] = h5py.ExternalLink("overlaps.h5", "/")
+            if add_overlap:
+                f["overlap_blocks"] = h5py.ExternalLink("overlaps.h5", "/")
+            else:
+                f["overlap_blocks"] = False
         else:
             f["hamiltonian_blocks"] = False
         if get_eigenvalues:
