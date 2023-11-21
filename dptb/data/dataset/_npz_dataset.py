@@ -73,7 +73,6 @@ class NpzDataset(AtomicInMemoryDataset):
         AtomicData_options: Dict[str, Any] = {},
         include_frames: Optional[List[int]] = None,
         type_mapper: TypeMapper = None,
-        orbital_mapper: TypeMapper = None,
     ):
         self.key_mapping = key_mapping
         self.npz_fixed_field_keys = npz_fixed_field_keys
@@ -86,7 +85,6 @@ class NpzDataset(AtomicInMemoryDataset):
             AtomicData_options=AtomicData_options,
             include_frames=include_frames,
             type_mapper=type_mapper,
-            orbital_mapper=orbital_mapper,
         )
 
     @property
