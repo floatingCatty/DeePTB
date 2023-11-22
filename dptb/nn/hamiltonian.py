@@ -83,6 +83,8 @@ class E3Hamiltonian(torch.nn.Module):
         n_edge = data[AtomicDataDict.EDGE_INDEX_KEY].shape[1]
         n_node = data[AtomicDataDict.NODE_FEATURES_KEY].shape[0]
 
+        data = AtomicDataDict.with_edge_vectors(data, with_lengths=True)
+
         if not self.decompose:
             # The EDGE_FEATURES_KEY and NODE_FAETURE_KEY are the reduced matrix elements
 
@@ -208,7 +210,7 @@ class SKHamiltonian(torch.nn.Module):
         if basis is not None:
             self.idp = OrbitalMapper(basis, method="sktb")
             if idp is not None:
-                assert idp == self.idp, "The basis of idp and basis should be the same."
+                assert idp.basis == self.idp.basis, "The basis of idp and basis should be the same."
         else:
             assert idp is not None, "Either basis or idp should be provided."
             self.idp = idp
@@ -216,7 +218,6 @@ class SKHamiltonian(torch.nn.Module):
         self.idp_e3 = OrbitalMapper(self.idp.basis, method="e3tb")
         self.basis = self.idp.basis
         self.cgbasis = {}
-        self.overlap = overlap
         self.strain = strain
         self.edge_field = edge_field
         self.node_field = node_field
@@ -245,7 +246,8 @@ class SKHamiltonian(torch.nn.Module):
             ),
             'd-s':torch.tensor([[1.]], dtype=self.dtype, device=self.device),
             'd-p':torch.tensor([
-                [(2/5)**0.5,(6/5)**0.5],[(3/5)**0.5,-2/5**0.5]
+                [(2/5)**0.5,(6/5)**0.5],
+                [(3/5)**0.5,-2/5**0.5]
             ], dtype=self.dtype, device=self.device
             ),
             'd-d':torch.tensor([
@@ -310,7 +312,7 @@ class SKHamiltonian(torch.nn.Module):
         # this is a little wired operation, since it acting on somekind of a edge(strain env) feature, and summed up to return a node feature.
         if self.strain:
             n_onsitenv = len(data[AtomicDataDict.ONSITENV_FEATURES_KEY])
-            for opair in self.idp.node_maps.keys(): # save all env direction and pair direction like sp and ps, but only get sp
+            for opair in self.idp_e3.node_maps.keys(): # save all env direction and pair direction like sp and ps, but only get sp
                 l1, l2 = anglrMId[opair[1]], anglrMId[opair[4]]
                 opairtype = opair[1]+"-"+opair[4]
                 n_skp = min(l1, l2)+1 # number of reduced matrix element
@@ -358,7 +360,7 @@ class SKHamiltonian(torch.nn.Module):
             'd-p': [1,11],
             'd-d': [0,6,20]
         }
-
+ 
         l1, l2 = anglrMId[pairtype[0]], anglrMId[pairtype[2]]
 
         cg = []

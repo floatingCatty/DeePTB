@@ -26,6 +26,13 @@ class BaseOnsite(ABC):
 
 
 class OnsiteFormula(BaseOnsite):
+    num_paras_dict = {
+        'uniform': 1,
+        'none': 0,
+        'strain': 0,
+        "NRL": 4,
+        "custom": None,
+    }
 
     def __init__(
             self, 
@@ -35,24 +42,20 @@ class OnsiteFormula(BaseOnsite):
             device: Union[str, torch.device] = torch.device("cpu")) -> None:
         super().__init__() 
         if functype in ['none', 'strain']:
-            self.functype = functype
-            self.num_paras = 0
-
+            pass
         elif functype == 'uniform':
-            self.functype = functype
-            self.num_paras = 1
             assert hasattr(self, 'uniform')
+
         elif functype == 'NRL':
-            self.functype = functype
-            self.num_paras = 4
             assert hasattr(self, 'NRL')
 
         elif functype == 'custom':
-            self.functype = functype
-            self.num_paras = None # defined by custom.
             assert hasattr(self, 'custom')
         else:
             raise ValueError('No such formula')
+        
+        self.functype = functype
+        self.num_paras = self.num_paras_dict[functype]
         
         self.idp = idp
         if self.functype in ["uniform", "none", "strain"]:
@@ -115,7 +118,7 @@ class OnsiteFormula(BaseOnsite):
         return nn_onsite_paras[idx] + self.none(atomic_numbers=atomic_numbers)
         
 
-    def NRL(self, atomic_numbers, onsitenv_index, onsitenv_length, nn_onsite_paras, rcut:th.float32 = th.tensor(6), w:th.float32 = 0.1, lda=1.0, **kwargs):
+    def NRL(self, atomic_numbers, onsitenv_index, onsitenv_length, nn_onsite_paras, rc:th.float32 = th.tensor(6), w:th.float32 = 0.1, lda=1.0, **kwargs):
         """ This is NRL-TB formula for onsite energies.
 
             rho_i = \sum_j exp(- lda**2 r_ij) f(r_ij)
@@ -144,8 +147,8 @@ class OnsiteFormula(BaseOnsite):
         nn_onsite_paras = nn_onsite_paras[idx]
         r_ijs = onsitenv_length.view(-1) # [N]
         exp_rij = th.exp(-lda**2 * r_ijs)
-        f_rij = 1/(1+th.exp((r_ijs-rcut+5*w)/w))
-        f_rij[r_ijs>=rcut] = 0.0
+        f_rij = 1/(1+th.exp((r_ijs-rc+5*w)/w))
+        f_rij[r_ijs>=rc] = 0.0
         rho_i = scatter(src=exp_rij * f_rij, index=onsitenv_index[0], dim=0, reduce="sum").unsqueeze(1) # [N_atom, 1]
         a_l, b_l, c_l, d_l = nn_onsite_paras[:,:,0], nn_onsite_paras[:,:,1], nn_onsite_paras[:,:,2], nn_onsite_paras[:,:,3]
         E_il = a_l + b_l * rho_i**(2/3) + c_l * rho_i**(4/3) + d_l * rho_i**2 # [N_atom, n_orb]
