@@ -14,7 +14,6 @@ def data(
 
     # ABACUS parsing input like:
     # {  "type": "ABACUS",
-    #    "root": "foo/bar",
     #    "parse_arguments": {
     #        "input_dir": "alice/bob",
     #        "preprocess_dir": "charlie/david",
@@ -23,15 +22,9 @@ def data(
     #        "add_overlap": true, 
     #        "get_eigenvalues": true } }
     if jdata["type"] == "ABACUS":
-        root = jdata["root"]
         abacus_args = jdata["parse_arguments"]
         assert abacus_args.get("input_dir") is not None, "ABACUS calculation results MUST be provided."
-
-        if abacus_args.get("preprocess_dir") is None:
-            # create a new preprocess dir under root if not given
-            print("Creating new preprocess dictionary...")
-            os.mkdir(os.path.join(root, "preprocess"))
-            abacus_args["preprocess_dir"] = os.path.join(root, "preprocess")
+        assert abacus_args.get("preprocess_dir") is not None, "Please assign a dictionary to store preprocess files."
 
         print("Begin parsing ABACUS output...")
         h5_filenames = recursive_parse(**abacus_args)
