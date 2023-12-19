@@ -143,12 +143,42 @@ def LinearLR():
         Argument("total_iters", int, optional=True, default=5, doc=doc_total_iters)
     ]
 
+def ReduceOnPlateau():
+    doc_mode = "One of min, max. In min mode, lr will be reduced when the quantity monitored has stopped decreasing; \
+        in max mode it will be reduced when the quantity monitored has stopped increasing. Default: 'min'."
+    doc_factor = "Factor by which the learning rate will be reduced. new_lr = lr * factor. Default: 0.1."
+    doc_patience = "Number of epochs with no improvement after which learning rate will be reduced. For example, \
+        if patience = 2, then we will ignore the first 2 epochs with no improvement, \
+        and will only decrease the LR after the 3rd epoch if the loss still hasn't improved then. Default: 10."
+    doc_threshold = "Threshold for measuring the new optimum, to only focus on significant changes. Default: 1e-4."
+    doc_threshold_mode = "One of rel, abs. In rel mode, dynamic_threshold = best * ( 1 + threshold ) in 'max' mode or \
+        best * ( 1 - threshold ) in min mode. In abs mode, \
+        dynamic_threshold = best + threshold in max mode or best - threshold in min mode. Default: 'rel'."
+    doc_cooldown = "Number of epochs to wait before resuming normal operation after lr has been reduced. Default: 0."
+    doc_min_lr = "A scalar or a list of scalars. \
+        A lower bound on the learning rate of all param groups or each group respectively. Default: 0."
+    doc_eps = "Minimal decay applied to lr. \
+        If the difference between new and old lr is smaller than eps, the update is ignored. Default: 1e-8."
+
+    return [
+        Argument("mode", str, optional=True, default="min", doc=doc_mode),
+        Argument("factor", float, optional=True, default=0.1, doc=doc_factor),
+        Argument("patience", int, optional=True, default=10, doc=doc_patience),
+        Argument("threshold", float, optional=True, default=1e-4, doc=doc_threshold),
+        Argument("threshold_mode", str, optional=True, default="rel", doc=doc_threshold_mode),
+        Argument("cooldown", int, optional=True, default=0, doc=doc_cooldown),
+        Argument("min_lr", [float, list], optional=True, default=0, doc=doc_min_lr),
+        Argument("eps", float, optional=True, default=1e-8, doc=doc_eps),
+    ]
+
+
 def lr_scheduler():
     doc_type = "select type of lr_scheduler, support type includes `exp`, `linear`"
 
     return Variant("type", [
             Argument("exp", dict, ExponentialLR()),
-            Argument("linear", dict, LinearLR())
+            Argument("linear", dict, LinearLR()),
+            Argument("rop", dict, ReduceOnPlateau(), doc="rop: reduce on plateau")
         ],optional=True, default_tag="exp", doc=doc_type)
 
 
@@ -157,12 +187,14 @@ def train_data_sub():
     doc_preprocess_path = ""
     doc_file_names = ""
     doc_pbc = ""
-
+    doc_reduce_edge = ""
+    
     args = [
         Argument("root", str, optional=False, doc=doc_root),
         Argument("preprocess_path", str, optional=False, doc=doc_preprocess_path),
         Argument("file_names", list, optional=False, doc=doc_file_names),
-        Argument("pbc", [bool, list], optional=True, default=True, doc=doc_pbc)
+        Argument("pbc", [bool, list], optional=True, default=True, doc=doc_pbc),
+        Argument("reduce_edge", bool, optional=True, default=True, doc=doc_reduce_edge)
     ]
 
     doc_train = ""
@@ -292,7 +324,10 @@ def embedding():
     return Variant("method", [
             Argument("se2", dict, se2()),
             Argument("baseline", dict, baseline()),
-            Argument("deeph-e3", dict, deephe3())
+            Argument("deeph-e3", dict, deephe3()),
+            Argument("e3baseline", dict, e3baseline()),
+            Argument("e3baseline_o", dict, e3baseline()),
+            Argument("e3baseline_swtp", dict, e3baseline()),
         ],optional=True, default_tag="se2", doc=doc_method)
 
 def se2():
@@ -366,6 +401,30 @@ def deephe3():
             Argument("n_layer", int, optional=True, default=3, doc=doc_n_layer),
         ]
 
+def e3baseline():
+    doc_irreps_hidden = ""
+    doc_lmax = ""
+    doc_avg_num_neighbors = ""
+    doc_n_radial_basis = ""
+    doc_r_max = ""
+    doc_n_layers = ""
+    doc_env_embed_multiplicity = ""
+    doc_linear_after_env_embed = ""
+    doc_latent_resnet_update_ratios_learnable = ""
+
+    return [
+            Argument("irreps_hidden", str, optional=True, default="64x0e+32x1o+16x2e+8x3o+8x4e+4x5o", doc=doc_irreps_hidden),
+            Argument("lmax", int, optional=True, default=3, doc=doc_lmax),
+            Argument("avg_num_neighbors", [int, float], optional=True, default=50, doc=doc_avg_num_neighbors),
+            Argument("r_max", float, optional=False, doc=doc_r_max),
+            Argument("n_layers", int, optional=True, default=3, doc=doc_n_layers),
+            Argument("n_radial_basis", int, optional=True, default=3, doc=doc_n_radial_basis),
+            Argument("env_embed_multiplicity", int, optional=True, default=10, doc=doc_env_embed_multiplicity),
+            Argument("linear_after_env_embed", bool, optional=True, default=False, doc=doc_linear_after_env_embed),
+            Argument("latent_resnet_update_ratios_learnable", bool, optional=True, default=False, doc=doc_latent_resnet_update_ratios_learnable)
+        ]
+
+
 def prediction():
     doc_method = ""
     doc_nn = ""
@@ -392,20 +451,17 @@ def sktb_prediction():
 
     return nn
 
+
 def e3tb_prediction():
-    doc_neurons = ""
-    doc_activation = ""
-    doc_if_batch_normalized = ""
-    doc_precision = ""
+    doc_scales_trainable = ""
+    doc_shifts_trainable = ""
 
     nn = [
-        Argument("neurons", list, optional=False, doc=doc_neurons),
-        Argument("activation", str, optional=True, default="tanh", doc=doc_activation),
-        Argument("if_batch_normalized", bool, optional=True, default=False, doc=doc_if_batch_normalized),
-
+        Argument("scales_trainable", bool, optional=True, default=False, doc=doc_scales_trainable),
+        Argument("shifts_trainable", bool, optional=True, default=False, doc=doc_shifts_trainable),
     ]
 
-    return []
+    return nn
 
 
 
@@ -509,6 +565,7 @@ def loss_options():
     loss_args = Variant("method", [
         Argument("hamil", dict, []),
         Argument("eigvals", dict, []),
+        Argument("hamil_abs", dict, []),
     ], optional=False, doc=doc_method)
 
     args = [
