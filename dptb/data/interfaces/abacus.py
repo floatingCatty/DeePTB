@@ -7,6 +7,7 @@ import sys
 import json
 import re
 from collections import Counter
+from tqdm import tqdm
 
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -50,8 +51,9 @@ def recursive_parse(input_dir, preprocess_dir, data_name="OUT.ABACUS", only_over
     preprocess_dir = os.path.abspath(preprocess_dir)
     os.makedirs(preprocess_dir, exist_ok=True)
     h5file_names = []
-    for file in os.listdir(input_dir):
-        if os.path.isdir(os.path.join(input_dir, file)):
+    folders = [file for file in os.listdir(input_dir) if os.path.isdir(os.path.join(input_dir, file))]
+    with tqdm(total=len(folders)) as pbar:
+        for file in folders:
             datafiles = os.listdir(os.path.join(input_dir, file))
             if data_name in datafiles:
                 if os.path.exists(os.path.join(input_dir, file, data_name, "hscsr.tgz")):
@@ -60,6 +62,7 @@ def recursive_parse(input_dir, preprocess_dir, data_name="OUT.ABACUS", only_over
                     _abacus_parse(os.path.join(input_dir, file), os.path.join(preprocess_dir, file), data_name, only_S=only_overlap, get_Ham=get_Hamiltonian,
                                 add_overlap=add_overlap, get_eigenvalues=get_eigenvalues)
                     h5file_names.append(os.path.join(file, "AtomicData.h5"))
+                    pbar.update(1)
                 except Exception as e:
                     print(f"Error in {data_name}: {e}")
                     continue
