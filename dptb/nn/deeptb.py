@@ -9,7 +9,7 @@ from dptb.data import AtomicDataDict
 from dptb.nn.hamiltonian import E3Hamiltonian, SKHamiltonian
 from dptb.nn.nnsk import NNSK
 from e3nn.o3 import Linear
-from dptb.nn.rescale import PerSpeciesScaleShift, PerEdgeSpeciesScaleShift
+from dptb.nn.rescale import E3PerSpeciesScaleShift, E3PerEdgeSpeciesScaleShift
 
 
 """ if this class is called, it suggest user choose a embedding method. If not, it should directly use _sktb.py
@@ -92,19 +92,16 @@ class DPTB(nn.Module):
             self.idp = idp
             
         self.basis = self.idp.basis
-        self.idp.get_node_maps()
-        self.idp.get_pair_maps()
+        self.idp.get_orbpair_maps()
 
         n_species = len(self.basis.keys())
-
-
         # initialize the embedding layer
         self.embedding = Embedding(**embedding, dtype=dtype, device=device, idp=self.idp, n_atom=n_species)
         
         # initialize the prediction layer
             
         if self.method == "sktb":
-            prediction["neurons"] = [self.embedding.out_node_dim] + prediction["neurons"] + [self.idp.node_reduced_matrix_element]
+            prediction["neurons"] = [self.embedding.out_node_dim] + prediction["neurons"] + [self.idp.n_onsite_Es]
             prediction["config"] = get_neuron_config(prediction["neurons"])
 
             self.node_prediction_h = AtomicResNet(
@@ -116,7 +113,7 @@ class DPTB(nn.Module):
             )
 
             prediction["neurons"][0] = self.embedding.out_edge_dim
-            prediction["neurons"][-1] = self.idp.edge_reduced_matrix_element
+            prediction["neurons"][-1] = self.idp.reduced_matrix_element
             prediction["config"] = get_neuron_config(prediction["neurons"])
             self.edge_prediction_h = AtomicResNet(
                 **prediction,
@@ -136,20 +133,26 @@ class DPTB(nn.Module):
                 )
 
         elif prediction.get("method") == "e3tb":
-            self.node_prediction_h = PerSpeciesScaleShift(
+            self.node_prediction_h = E3PerSpeciesScaleShift(
                 field=AtomicDataDict.NODE_FEATURES_KEY,
                 num_types=n_species,
+                irreps_in=self.embedding.out_node_irreps,
                 out_field = AtomicDataDict.NODE_FEATURES_KEY,
-                shifts=None,
+                shifts=0.,
                 scales=1.,
+                dtype=self.dtype,
+                device=self.device,
                 **prediction,
             )
-            self.edge_prediction_h = PerEdgeSpeciesScaleShift(
+            self.edge_prediction_h = E3PerEdgeSpeciesScaleShift(
                 field=AtomicDataDict.EDGE_FEATURES_KEY,
                 num_types=n_species,
+                irreps_in=self.embedding.out_edge_irreps,
                 out_field = AtomicDataDict.EDGE_FEATURES_KEY,
-                shifts=None,
+                shifts=0.,
                 scales=1.,
+                dtype=self.dtype,
+                device=self.device,
                 **prediction,
             )
             if self.overlap:
