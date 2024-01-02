@@ -165,7 +165,8 @@ class _TrajData(object):
                 pos = self.data["pos"][frame][:],
                 cell = self.data["cell"][frame][:],
                 atomic_numbers = self.data["atomic_numbers"][frame],
-                pbc = self.info["pbc"],
+                # pbc is stored in AtomicData_options now.
+                #pbc = self.info["pbc"], 
                 **self.AtomicData_options)
             if "hamiltonian_blocks" in self.data:
                 assert idp is not None, "LCAO Basis must be provided  in `common_option` for loading Hamiltonian."
@@ -202,41 +203,29 @@ class DefaultDataset(AtomicInMemoryDataset):
     def __init__(
             self,
             root: str,
-            prefix: Optional[str] = None,
-            url: Optional[str] = None,
-            AtomicData_options: Dict[str, Any] = {},
-            include_frames: Optional[List[int]] = None,
+            info_files: Dict[str, Dict],
+            url: Optional[str] = None,                    # seems useless but can't be remove
+            include_frames: Optional[List[int]] = None,   # maybe support in future
             type_mapper: TypeMapper = None,
             get_Hamiltonian: bool = False,
-            get_eigenvalues: bool = False
+            get_eigenvalues: bool = False,
     ):
         self.root = root
         self.url = url
+        self.info_files = info_files
+        # The following flags are stored to label dataset.
+        self.get_Hamiltonian = get_Hamiltonian
+        self.get_eigenvalues = get_eigenvalues
 
-        self.file_name = []
-        for dir_name in os.listdir(root):
-            if os.path.isdir(os.path.join(root, dir_name)):
-                if prefix is not None:
-                    if dir_name[:len(prefix)] == prefix:
-                        self.file_name.append(dir_name)
-                else:
-                    self.file_name.append(dir_name)
         # load all data files            
         self.raw_data = []
-
-        # load a public info.json if provided.
-        if "info.json" in os.listdir(root):
-            info = j_loader(os.path.join(root, "info.json"))
-        else:
-            # load seperately.
-            info = None
-
-        for file in self.file_name:
-            if info is None:
-                # use info provided in this trajectory.
-                try: info = j_loader(os.path.join(root, file, "info.json"))
-                except Exception as e:
-                    raise Exception(f"info.json is not properly provided for `{file}`.") from e
+        for file in self.info_files.keys():
+            # get the info here
+            info = info_files[file]
+            assert "AtomicData_options" in info
+            AtomicData_options = info["AtomicData_options"]
+            assert "r_max" in AtomicData_options
+            assert "pbc" in AtomicData_options
             if info["pos_type"] == "ase":
                 subdata = _TrajData.from_ase_traj(os.path.join(self.root, file), 
                                 AtomicData_options,
@@ -251,11 +240,14 @@ class DefaultDataset(AtomicInMemoryDataset):
                                 info=info)
             self.raw_data.append(subdata)
         
+        # The AtomicData_options is never used here.
+        # Because we always return a list of AtomicData object in `get_data()`.
+        # That is, AtomicInMemoryDataset will not use AtomicData_options to build any AtomicData here.
         super().__init__(
-            file_name=self.file_name,
+            file_name=None, # this seems not important too.
             url=url,
             root=root,
-            AtomicData_options=AtomicData_options,
+            AtomicData_options={},  # we do not pass anything here.
             include_frames=include_frames,
             type_mapper=type_mapper,
         )
@@ -271,9 +263,11 @@ class DefaultDataset(AtomicInMemoryDataset):
     
     @property
     def raw_file_names(self):
+        # TODO: this is not implemented.
         return "Null"
 
     @property
     def raw_dir(self):
+        # TODO: this is not implemented.
         return self.root
     

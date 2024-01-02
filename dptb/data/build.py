@@ -1,10 +1,13 @@
 import inspect
+import os
 from importlib import import_module
-from dptb.data.dataset import ABACUSDataset, ABACUSInMemoryDataset, DefaultDataset
+
+from dptb.data.dataset import DefaultDataset
 from dptb import data
 from dptb.data.transforms import TypeMapper, OrbitalMapper
 from dptb.data import AtomicDataset, register_fields
 from dptb.utils import instantiate, get_w_prefix
+from dptb.utils.tools import j_loader
 
 
 def dataset_from_config(config, prefix: str = "dataset") -> AtomicDataset:
@@ -99,46 +102,75 @@ def dataset_from_config(config, prefix: str = "dataset") -> AtomicDataset:
 
 def build_dataset(set_options, common_options):
 
-    AtomicDataOptions = {
-        "r_max": common_options["bond_cutoff"],
-        "er_max": common_options.get("env_cutoff", None),
-        "oer_max": common_options.get("onsite_cutoff", None),
-    }
+    dataset_type = set_options.get("type", "DefaultDataset")
 
-    AtomicDataOptions.update(set_options.get("AtomicData_options", {}))
-
-    type = set_options.get("type", "DefaultDataset")
-
-    # input in common_option for Default Dataset:
-    # "basis": optional, dict like {"C": "2s2p1d"}. 
-    #          Must be provided when loading Hamiltonian.
-    # "bond_cutoff": MUST-have, cutoff when buiding edges of the graph.
-    # "env_cutoff": optional, cutoff when building hopping environment neighbors.
-    # "onsite_sutoff": optional, cutoff when building onsite environment neighbors.
     # input in set_option for Default Dataset:
     # "root": main dir storing all trajectory folders.
     #         that is, each subfolder of root contains a trajectory.
     # "prefix": optional, load selected trajectory folders.
     # "get_Hamiltonian": load the Hamiltonian file to edges of the graph or not.
     # "get_eigenvalues": load the eigenvalues to the graph or not.
+    # "setinfo": MUST HAVE, the name of the json file used to build dataset.
     # Example:
     # "train": {
     #        "type": "DefaultDataset",
     #        "root": "foo/bar/data_files_here",
-    #        "prefix": "traj"
+    #        "prefix": "traj",
+    #        "setinfo": "with_pbc.json"
     #    }
-    if type == "DefaultDataset":
+    if dataset_type == "DefaultDataset":
+        # See if we can get a OrbitalMapper.
         if "basis" in common_options:
             idp = OrbitalMapper(common_options["basis"])
         else:
             idp = None
+
+        # Explore the dataset's folder structure.
+        root = set_options["root"]
+        prefix = set_options.get("prefix", None)
+        include_folders = []
+        for dir_name in os.listdir(root):
+            if os.path.isdir(os.path.join(root, dir_name)):
+                if prefix is not None:
+                    if dir_name[:len(prefix)] == prefix:
+                        include_folders.append(dir_name)
+                else:
+                    include_folders.append(dir_name)
+
+        # We need to check the `setinfo.json` very carefully here.
+        # Different `setinfo` points to different dataset, 
+        # even if the data files in `root` are basically the same.
+        info_files = {}
+
+        # See if a public info is provided.
+        if "info.json" in os.listdir(root):
+            public_info = j_loader(os.path.join(root, "info.json"))
+        else:
+            public_info = None
+
+        # Load info in each trajectory folders seperately.
+        for file in include_folders:
+            if os.path.join(root, file, "info.json") is not None:
+                # use info provided in this trajectory.
+                info = j_loader(os.path.join(root, file, "info.json"))
+                info_files[file] = info
+            elif public_info is not None:
+                # use public info instead
+                info_files[file] = public_info
+            else:
+                # no info for this file
+                raise Exception(f"info.json is not properly provided for `{file}`.")
+            
+        # We will sort the info_files here.
+        # The order itself is not important, but must be consistant for the same list.
+        info_files = {key: info_files[key] for key in sorted(info_files)}
+        
         dataset = DefaultDataset(
-            root=set_options["root"],
-            AtomicData_options=AtomicDataOptions,
+            root=root,
             type_mapper=idp,
-            prefix=set_options.get("prefix", None),
             get_Hamiltonian=set_options.get("get_Hamiltonian", False),
-            get_eigenvalues=set_options.get("get_eigenvalues", False)
+            get_eigenvalues=set_options.get("get_eigenvalues", False),
+            info_files = info_files
         )
 
     else:
