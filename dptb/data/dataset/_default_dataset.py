@@ -75,7 +75,8 @@ class _TrajData(object):
         pos = np.loadtxt(os.path.join(root, "positions.dat"))
         assert pos.shape[0] == self.info["nframes"] * self.info["natoms"]
         pos = pos.reshape(self.info["nframes"], self.info["natoms"], 3)
-        if self.info["pos_type"] == "cart":
+        # ase use cartesian by default.
+        if self.info["pos_type"] == "cart" or self.info["pos_type"] == "ase":
             self.data["pos"] = pos
         elif self.info["pos_type"] == "frac":
             self.data["pos"] = pos @ self.data["cell"]
@@ -127,9 +128,6 @@ class _TrajData(object):
                       get_Hamiltonian = False,
                       get_eigenvalues = False,
                       info = None):
-        assert info["pos_type"] == "ase"
-        # ase use cartesian by default.
-        info["pos_type"] = "cart"
 
         traj_file = glob.glob(f"{root}/*.traj")
         assert len(traj_file) == 1, print("only one ase trajectory file can be provided.")
