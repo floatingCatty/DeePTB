@@ -8,6 +8,7 @@ from dptb.data.transforms import TypeMapper, OrbitalMapper
 from dptb.data import AtomicDataset, register_fields
 from dptb.utils import instantiate, get_w_prefix
 from dptb.utils.tools import j_loader
+from dptb.utils.argcheck import normalize_setinfo
 
 
 def dataset_from_config(config, prefix: str = "dataset") -> AtomicDataset:
@@ -145,6 +146,7 @@ def build_dataset(set_options, common_options):
         # See if a public info is provided.
         if "info.json" in os.listdir(root):
             public_info = j_loader(os.path.join(root, "info.json"))
+            public_info = normalize_setinfo(public_info)
         else:
             public_info = None
 
@@ -153,6 +155,7 @@ def build_dataset(set_options, common_options):
             if os.path.join(root, file, "info.json") is not None:
                 # use info provided in this trajectory.
                 info = j_loader(os.path.join(root, file, "info.json"))
+                info = normalize_setinfo(info)
                 info_files[file] = info
             elif public_info is not None:
                 # use public info instead
