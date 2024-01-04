@@ -147,6 +147,7 @@ def build_dataset(set_options, common_options):
         if "info.json" in os.listdir(root):
             public_info = j_loader(os.path.join(root, "info.json"))
             public_info = normalize_setinfo(public_info)
+            print("A public `info.json` file is provided, and will be used by the subfolders who do not have their own `info.json` file.")
         else:
             public_info = None
 

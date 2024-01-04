@@ -52,7 +52,8 @@ def recursive_parse(input_path,
                     only_overlap=False, 
                     parse_Hamiltonian=False, 
                     add_overlap=False, 
-                    parse_eigenvalues=False):
+                    parse_eigenvalues=False,
+                    prefix="data"):
     """
     Parse ABACUS single point SCF calculation outputs.
     Input:
@@ -67,6 +68,7 @@ def recursive_parse(input_path,
                    `parse_Hamiltonian` must be true to add overlap.
     `parse_eigenvalues`: determine whether parsing `kpoints.dat` and `BAND_1.dat` or not.
                          that is, the k-points will always be loaded with bands.
+    `prefix`: prefix of the processed data folders' names. 
     """
     if isinstance(input_path, list) and all(isinstance(item, str) for item in input_path):
         input_path = input_path
@@ -79,7 +81,7 @@ def recursive_parse(input_path,
     folders = [item for item in input_path if os.path.isdir(item)]
 
     with tqdm(total=len(folders)) as pbar:
-        for folder in folders:
+        for index, folder in enumerate(folders):
             datafiles = os.listdir(folder)
             if data_name in datafiles:
                 # The follwing `if` block is used by us only.
@@ -87,7 +89,7 @@ def recursive_parse(input_path,
                     os.system("cd "+os.path.join(folder, data_name) + " && tar -zxvf hscsr.tgz && mv OUT.ABACUS/* ./")
                 try:
                     _abacus_parse(folder, 
-                                  os.path.join(preprocess_dir, os.path.basename(folder)), 
+                                  os.path.join(preprocess_dir, f"{prefix}.{index}"), 
                                   data_name, 
                                   only_S=only_overlap, 
                                   get_Ham=parse_Hamiltonian,
@@ -96,7 +98,7 @@ def recursive_parse(input_path,
                     #h5file_names.append(os.path.join(file, "AtomicData.h5"))
                     pbar.update(1)
                 except Exception as e:
-                    print(f"Error in {data_name}: {e}")
+                    print(f"Error in {folder}/{data_name}: {e}")
                     continue
     #return h5file_names
 
@@ -123,6 +125,12 @@ def _abacus_parse(input_path,
         log_file_name = "running_get_S.log"
     else:
         log_file_name = "running_scf.log"
+
+    with open(os.path.join(input_path, data_name, log_file_name), 'r') as f_chk:
+        lines = f_chk.readlines()
+        if not lines or " Total  Time  :" not in lines[-1]:
+            raise ValueError(f"Job is not normal ending!")
+
     with open(os.path.join(input_path, data_name, log_file_name), 'r') as f:
         f.readline()
         line = f.readline()
