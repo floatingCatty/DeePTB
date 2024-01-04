@@ -153,7 +153,7 @@ def build_dataset(set_options, common_options):
 
         # Load info in each trajectory folders seperately.
         for file in include_folders:
-            if os.path.join(root, file, "info.json") is not None:
+            if "info.json" in os.listdir(os.path.join(root, file)):
                 # use info provided in this trajectory.
                 info = j_loader(os.path.join(root, file, "info.json"))
                 info = normalize_setinfo(info)

@@ -85,6 +85,7 @@ class _TrajData(object):
         
         # load optional data files
         if os.path.exists(os.path.join(self.root, "eigenvalues.npy")) and get_eigenvalues==True:
+            assert "bandinfo" in self.info, "`bandinfo` must be provided in `info.json` for loading eigenvalues."
             assert os.path.exists(os.path.join(self.root, "kpoints.npy"))
             kpoints = np.load(os.path.join(self.root, "kpoints.npy"))
             if kpoints.ndim == 2:
@@ -178,6 +179,7 @@ class _TrajData(object):
                 #     atomic_data = e3(atomic_data.to_dict())
                 # atomic_data = AtomicData.from_dict(atomic_data)
             if "eigenvalues" in self.data and "kpoints" in self.data:
+                assert "bandinfo" in self.info, "`bandinfo` must be provided in `info.json` for loading eigenvalues."
                 bandinfo = self.info["bandinfo"]
                 atomic_data[AtomicDataDict.KPOINT_KEY] = torch.as_tensor(self.data["kpoints"][frame][:], 
                                                                          dtype=torch.get_default_dtype())
