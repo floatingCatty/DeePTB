@@ -1,11 +1,13 @@
 from typing import Dict, Any, List, Callable, Union, Optional
 import os
 import glob
+import re
 
 import numpy as np
 import h5py
 from ase import Atoms
 from ase.io import Trajectory
+from ase.data import chemical_symbols
 
 import torch
 
@@ -270,4 +272,164 @@ class DefaultDataset(AtomicInMemoryDataset):
     def raw_dir(self):
         # TODO: this is not implemented.
         return self.root
+    
+    def _calculate_means_and_std(self, data_tensor, slice_indices):
+        """
+        Calculate the mean and standard deviation of the input data.
+        The columns of the input data are classified by slice indices.
+        """
+        norms_dict = {}
+        variance_sum_dict = {}
+
+        # first pass, calculate all the norms.
+        for row in data_tensor:
+            for slice_index in slice_indices:
+                if slice_index is not None:
+                    slice_key = (slice_index.start, slice_index.stop)
+                    slice_data = row[slice_index]
+                    norm = torch.norm(slice_data)
+                    if slice_key not in norms_dict:
+                        norms_dict[slice_key] = []
+                    norms_dict[slice_key].append(norm)
+                    # we initalize the std dictionary here too.
+                    if slice_key not in variance_sum_dict:
+                        variance_sum_dict[slice_key] = 0.0
+        # averange over the whole data tensor
+        avg_norms = {index: torch.mean(torch.stack(norms)) for index, norms in norms_dict.items()}
+
+        # second pass, calculate all the deviations
+        for row in data_tensor:
+            for slice_index in slice_indices:
+                if slice_index is not None:
+                    slice_key = (slice_index.start, slice_index.stop)
+                    slice_data = row[slice_index]
+                    avg_norm = avg_norms[slice_key]
+                    # variance between norm and averange norm
+                    variance_sum_dict[slice_key] += (torch.norm(slice_data) - avg_norm) ** 2
+        # averange over the whold dataset
+        std_devs = {slice_key: torch.sqrt(variance_sum / (len(data_tensor))) for slice_key, variance_sum in variance_sum_dict.items()}
+
+        # save it as tensors
+        avg_norms_tensor = torch.tensor([avg_norms.get((index.start, index.stop), float('nan')) for index in slice_indices])
+        std_devs_tensor = torch.tensor([std_devs.get((index.start, index.stop), float('nan')) for index in slice_indices])
+
+        return avg_norms_tensor, std_devs_tensor
+    
+    def E3statistics(self, 
+                     mode: str):
+        # function to get the mean & std across the dataset.
+        if mode == "edge":
+            return self._E3_edge_statistics()
+        elif mode == "node":
+            return self._E3_node_statistics()
+        else:
+            raise ValueError("Not supported statistics.")
+
+    def _E3_edge_statistics(self):
+        assert self.transform is not None
+        idp = self.transform
+        idp.get_irreps()
+        idp.get_orbpairtype_maps()
+
+        # we get the slice for irreps here
+        all_slices = []
+        num_scalar = 0
+        scalar_slices = []
+        index = 0
+        for irrep in idp.orbpair_irreps:
+            match = re.search(r'\dx(\d+)e', str(irrep))
+            if match:
+                l = int(match.group(1))
+                irrep_slice = slice(index, index+2*l+1)
+                if l == 0:
+                    num_scalar+=1
+                    scalar_slices.append(scalar_slices)
+                all_slices.append(irrep_slice)
+                index = index+2*l+1
+
+        # we need to classify all the edges by their bond types
+        bond_data = {}
+        bond_slices = {}
+        bond_mean = {}
+        bond_std = {}
+
+        bond_masks = idp.mask_to_erme
+        for bond in idp.bond_to_type.keys():
+            # create the empty list for each bond-wise data
+            bond_data[bond] = []
+            bond_mean[bond] = []
+            bond_std[bond] = []
+            # get the mask for each bond
+            for bond_mask in bond_masks:
+                bond_slices[bond] = [item if condition else None for item, condition in zip(all_slices, bond_mask)]
+        
+        # go through all edge data
+        all_data = self.data.to_dict()
+        for (indexes, feature) in zip(all_data["edge_index"].t(), all_data["edge_features"]):
+            index0, index1 = indexes
+            # unpack the batched node index into atomic_number
+            atom0 = int(all_data["atomic_numbers"][index0])
+            atom1 = int(all_data["atomic_numbers"][index1])
+            bond = f"{chemical_symbols[atom0]}-{chemical_symbols[atom1]}"
+            bond_data[bond].append(feature)
+
+        for bond, bonddata in bond_data.items():
+            # gather data into a big tensor.
+            bond_data[bond] =  torch.cat([t.unsqueeze(0) for t in bonddata], dim=0)
+            avg_norms_tensor, std_devs_tensor = self._calculate_means_and_std(bond_data[bond],  bond_slices[bond])
+            bond_mean[bond] = avg_norms_tensor
+            bond_std[bond] = std_devs_tensor
+
+        return bond_mean, bond_std
+    
+    def _E3_node_statistics(self):
+        assert self.transform is not None
+        idp = self.transform
+        idp.get_irreps()
+        idp.get_orbpairtype_maps()
+
+        # we get the slice for irreps here
+        all_slices = []
+        num_scalar = 0
+        scalar_slices = []
+        index = 0
+        for irrep in idp.orbpair_irreps:
+            match = re.search(r'\dx(\d+)e', str(irrep))
+            if match:
+                l = int(match.group(1))
+                irrep_slice = slice(index, index+2*l+1)
+                if l == 0:
+                    num_scalar+=1
+                    scalar_slices.append(scalar_slices)
+                all_slices.append(irrep_slice)
+                index = index+2*l+1
+
+        # we need to classify all the node by their chemical symbol
+        node_data = {}
+        node_slices = {}
+        node_mean = {}
+        node_std = {}
+
+        node_masks = idp.mask_to_nrme
+        for atom in idp.basis.keys():
+            # create the empty list for each node-wise data
+            node_data[atom] = []
+            node_mean[atom] = []
+            node_std[atom] = []
+            # get the mask for each node
+            for node_mask in node_masks:
+                node_slices[atom] = [item if condition else None for item, condition in zip(all_slices, node_mask)]
+        # go through all node data
+        all_data = self.data.to_dict()
+        for (atom, feature) in zip(all_data["atomic_numbers"], all_data["node_features"]):
+            node_data[chemical_symbols[atom]].append(feature)
+
+        for atom, nodedata in node_data.items():
+            # gather data into a big tensor.
+            node_data[atom] =  torch.cat([t.unsqueeze(0) for t in nodedata], dim=0)
+            avg_norms_tensor, std_devs_tensor = self._calculate_means_and_std(node_data[atom], node_slices[atom])
+            node_mean[atom] = avg_norms_tensor
+            node_std[atom] = std_devs_tensor
+
+        return node_mean, node_std
     
