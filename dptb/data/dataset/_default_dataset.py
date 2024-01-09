@@ -271,3 +271,93 @@ class DefaultDataset(AtomicInMemoryDataset):
         # TODO: this is not implemented.
         return self.root
     
+    def E3statistics(self, mode: str):
+        assert self.transform is not None
+        if mode == "edge":
+            return self._E3edgespecies_stat()
+        elif mode == "node":
+            return self._E3nodespecies_stat()
+        else:
+            raise ValueError("Not supported E3 statistics type.")
+    
+    def _E3edgespecies_stat(self):
+        # we get the bond type marked dataset first
+        idp = self.transform
+        typed_dataset = idp(self.data.to_dict())
+
+        idp.get_irreps()
+        irrep_slices = []
+        index = 0
+        for irrep in idp.orbpair_irreps:
+            l = int(str(irrep)[2])
+            irrep_slice = slice(index, index+2*l+1)
+            irrep_slices.append(irrep_slice)
+            index = index+2*l+1
+
+        features = typed_dataset["edge_features"]
+        hopping_block_mask = idp.mask_to_erme[typed_dataset["edge_type"].flatten()]
+        typed_hopping = {}
+        for bt, tp in idp.bond_to_type.items():
+            hopping_tp_mask = hopping_block_mask[typed_dataset["edge_type"].flatten().eq(tp)]
+            hopping_tp = features[typed_dataset["edge_type"].flatten().eq(tp)]
+            filtered_vecs = torch.where(hopping_tp_mask, hopping_tp, torch.tensor(float('nan')))
+            typed_hopping[bt] = filtered_vecs
+        
+        # calculate norm & mean
+        typed_norm = {}
+        typed_norm_ave = {}
+        typed_norm_std = {}
+        for bt in idp.bond_to_type.keys():
+            norms_per_irrep = []
+            for s in irrep_slices:
+                sub_tensor = typed_hopping[bt][:, s]
+                norms = torch.norm(sub_tensor, p=2, dim=1)
+                norms_per_irrep.append(norms)
+            typed_norm[bt] = norms_per_irrep
+            bt_ave = [torch.mean(norms).item() for norms in typed_norm[bt]]
+            typed_norm_ave[bt] = bt_ave
+            bt_std = [torch.std(norms).item() for norms in typed_norm[bt]]
+            typed_norm_std[bt] = bt_std
+
+        return typed_norm_ave, typed_norm_std
+    
+    def _E3nodespecies_stat(self):
+        # we get the type marked dataset first
+        idp = self.transform
+        typed_dataset = idp(self.data.to_dict())
+
+        idp.get_irreps()
+        irrep_slices = []
+        index = 0
+        for irrep in idp.orbpair_irreps:
+            l = int(str(irrep)[2])
+            irrep_slice = slice(index, index+2*l+1)
+            irrep_slices.append(irrep_slice)
+            index = index+2*l+1
+
+        features = typed_dataset["node_features"]
+        onsite_block_mask = idp.mask_to_nrme[typed_dataset["atom_types"].flatten()]
+        typed_onsite = {}
+        for at, tp in idp.chemical_symbol_to_type.items():
+            onsite_tp_mask = onsite_block_mask[typed_dataset["atom_types"].flatten().eq(tp)]
+            onsite_tp = features[typed_dataset["atom_types"].flatten().eq(tp)]
+            filtered_vecs = torch.where(onsite_tp_mask, onsite_tp, torch.tensor(float('nan')))
+            typed_onsite[at] = filtered_vecs
+        
+        # calculate norm & mean
+        typed_norm = {}
+        typed_norm_ave = {}
+        typed_norm_std = {}
+        for at in idp.chemical_symbol_to_type.keys():
+            norms_per_irrep = []
+            for s in irrep_slices:
+                sub_tensor = typed_onsite[at][:, s]
+                norms = torch.norm(sub_tensor, p=2, dim=1)
+                norms_per_irrep.append(norms)
+            typed_norm[at] = norms_per_irrep
+            bt_ave = [torch.mean(norms).item() for norms in typed_norm[at]]
+            typed_norm_ave[at] = bt_ave
+            bt_std = [torch.std(norms).item() for norms in typed_norm[at]]
+            typed_norm_std[at] = bt_std
+
+        return typed_norm_ave, typed_norm_std
