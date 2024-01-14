@@ -285,14 +285,8 @@ class DefaultDataset(AtomicInMemoryDataset):
         idp = self.transform
         typed_dataset = idp(self.data.to_dict())
 
-        idp.get_irreps()
-        irrep_slices = []
-        index = 0
-        for irrep in idp.orbpair_irreps:
-            l = int(str(irrep)[2])
-            irrep_slice = slice(index, index+2*l+1)
-            irrep_slices.append(irrep_slice)
-            index = index+2*l+1
+        idp.get_irreps(no_parity=False)
+        irrep_slices = idp.orbpair_irreps.slices()
 
         features = typed_dataset["edge_features"]
         hopping_block_mask = idp.mask_to_erme[typed_dataset["edge_type"].flatten()]
@@ -307,33 +301,45 @@ class DefaultDataset(AtomicInMemoryDataset):
         typed_norm = {}
         typed_norm_ave = {}
         typed_norm_std = {}
+        typed_scalar = {}
+        typed_scalar_ave = {}
+        typed_scalar_std = {}
         for bt in idp.bond_to_type.keys():
             norms_per_irrep = []
+            scalars_per_irrep = []
             for s in irrep_slices:
                 sub_tensor = typed_hopping[bt][:, s]
+                # dump the nan blocks here
+                if torch.isnan(sub_tensor).all():
+                    continue
                 norms = torch.norm(sub_tensor, p=2, dim=1)
+                if s.stop - s.start == 1:
+                    # it's a scalar
+                    scalar_tensor = typed_hopping[bt][:, s]
+                    scalars_per_irrep.append(scalar_tensor.squeeze(-1))
                 norms_per_irrep.append(norms)
+            # dump the nan values
             typed_norm[bt] = norms_per_irrep
+            typed_scalar[bt] = scalars_per_irrep
+
             bt_ave = [torch.mean(norms).item() for norms in typed_norm[bt]]
             typed_norm_ave[bt] = bt_ave
             bt_std = [torch.std(norms).item() for norms in typed_norm[bt]]
             typed_norm_std[bt] = bt_std
+            bt_scalar_ave = [torch.mean(scalar).item() for scalar in typed_scalar[bt]]
+            typed_scalar_ave[bt] = bt_scalar_ave
+            bt_scalar_std = [torch.std(scalar).item() for scalar in typed_scalar[bt]]
+            typed_scalar_std[bt] = bt_scalar_std
 
-        return typed_norm_ave, typed_norm_std
+        return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std
     
     def _E3nodespecies_stat(self):
         # we get the type marked dataset first
         idp = self.transform
         typed_dataset = idp(self.data.to_dict())
 
-        idp.get_irreps()
-        irrep_slices = []
-        index = 0
-        for irrep in idp.orbpair_irreps:
-            l = int(str(irrep)[2])
-            irrep_slice = slice(index, index+2*l+1)
-            irrep_slices.append(irrep_slice)
-            index = index+2*l+1
+        idp.get_irreps(no_parity=False)
+        irrep_slices = idp.orbpair_irreps.slices()
 
         features = typed_dataset["node_features"]
         onsite_block_mask = idp.mask_to_nrme[typed_dataset["atom_types"].flatten()]
@@ -348,16 +354,33 @@ class DefaultDataset(AtomicInMemoryDataset):
         typed_norm = {}
         typed_norm_ave = {}
         typed_norm_std = {}
+        typed_scalar = {}
+        typed_scalar_ave = {}
+        typed_scalar_std = {}
         for at in idp.chemical_symbol_to_type.keys():
             norms_per_irrep = []
+            scalars_per_irrep = []
             for s in irrep_slices:
                 sub_tensor = typed_onsite[at][:, s]
+                # dump the nan blocks here
+                if torch.isnan(sub_tensor).all():
+                    continue
                 norms = torch.norm(sub_tensor, p=2, dim=1)
+                if s.stop - s.start == 1:
+                    # it's a scalar
+                    scalar_tensor = typed_onsite[at][:, s]
+                    scalars_per_irrep.append(scalar_tensor.squeeze(-1))
                 norms_per_irrep.append(norms)
             typed_norm[at] = norms_per_irrep
-            bt_ave = [torch.mean(norms).item() for norms in typed_norm[at]]
-            typed_norm_ave[at] = bt_ave
-            bt_std = [torch.std(norms).item() for norms in typed_norm[at]]
-            typed_norm_std[at] = bt_std
+            typed_scalar[at] = scalars_per_irrep
 
-        return typed_norm_ave, typed_norm_std
+            at_ave = [torch.mean(norms).item() for norms in typed_norm[at]]
+            typed_norm_ave[at] = at_ave
+            at_std = [torch.std(norms).item() for norms in typed_norm[at]]
+            typed_norm_std[at] = at_std
+            at_scalar_ave = [torch.mean(scalar).item() for scalar in typed_scalar[at]]
+            typed_scalar_ave[at] = at_scalar_ave
+            at_scalar_std = [torch.std(scalar).item() for scalar in typed_scalar[at]]
+            typed_scalar_std[at] = at_scalar_std
+
+        return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std
