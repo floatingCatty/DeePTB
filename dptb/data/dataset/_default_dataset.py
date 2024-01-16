@@ -18,6 +18,7 @@ from ._base_datasets import AtomicDataset, AtomicInMemoryDataset
 #from dptb.nn.hamiltonian import E3Hamiltonian
 from dptb.data.interfaces.ham_to_feature import ham_block_to_feature
 from dptb.utils.tools import j_loader
+from dptb.data.AtomicDataDict import with_edge_vectors
 
 class _TrajData(object):
     '''
@@ -271,16 +272,16 @@ class DefaultDataset(AtomicInMemoryDataset):
         # TODO: this is not implemented.
         return self.root
     
-    def E3statistics(self, mode: str):
+    def E3statistics(self, mode: str, decay=False):
         assert self.transform is not None
         if mode == "edge":
-            return self._E3edgespecies_stat()
+            return self._E3edgespecies_stat(decay=decay)
         elif mode == "node":
             return self._E3nodespecies_stat()
         else:
             raise ValueError("Not supported E3 statistics type.")
     
-    def _E3edgespecies_stat(self):
+    def _E3edgespecies_stat(self, decay):
         # we get the bond type marked dataset first
         idp = self.transform
         typed_dataset = idp(self.data.to_dict())
@@ -318,7 +319,6 @@ class DefaultDataset(AtomicInMemoryDataset):
                     scalar_tensor = typed_hopping[bt][:, s]
                     scalars_per_irrep.append(scalar_tensor.squeeze(-1))
                 norms_per_irrep.append(norms)
-            # dump the nan values
             typed_norm[bt] = norms_per_irrep
             typed_scalar[bt] = scalars_per_irrep
 
@@ -330,8 +330,26 @@ class DefaultDataset(AtomicInMemoryDataset):
             typed_scalar_ave[bt] = bt_scalar_ave
             bt_scalar_std = [torch.std(scalar).item() for scalar in typed_scalar[bt]]
             typed_scalar_std[bt] = bt_scalar_std
+        
+        if not decay:
+            return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std
+        else:
+            typed_dataset = with_edge_vectors(typed_dataset)
+            decay = {}
+            for bt, tp in idp.bond_to_type.items():
+                decay_bt = {}
+                lengths_bt = typed_dataset["edge_lengths"][typed_dataset["edge_type"].flatten().eq(tp)]
+                sorted_lengths, indices = lengths_bt.sort() # from small to large
+                # sort the norms by irrep l
+                sorted_norms = [typed_norm[bt][i] for i in idp.orbpair_irreps.sort().inv]
+                # sort the norms by edge length
+                for i_irrep, irrep_norms in enumerate(sorted_norms):
+                    sorted_norms[i_irrep] = irrep_norms[indices]
+                decay_bt["edge_length"] = sorted_lengths
+                decay_bt["norm_decay"] = sorted_norms
+                decay[bt] = decay_bt
+            return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std, decay 
 
-        return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std
     
     def _E3nodespecies_stat(self):
         # we get the type marked dataset first
