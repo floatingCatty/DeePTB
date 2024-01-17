@@ -19,6 +19,7 @@ from ._base_datasets import AtomicDataset, AtomicInMemoryDataset
 from dptb.data.interfaces.ham_to_feature import ham_block_to_feature
 from dptb.utils.tools import j_loader
 from dptb.data.AtomicDataDict import with_edge_vectors
+from dptb.nn.hamiltonian import E3Hamiltonian
 
 class _TrajData(object):
     '''
@@ -274,17 +275,23 @@ class DefaultDataset(AtomicInMemoryDataset):
     
     def E3statistics(self, mode: str, decay=False):
         assert self.transform is not None
+        idp = self.transform
+        typed_dataset = idp(self.data.to_dict())
+        e3h = E3Hamiltonian(basis=idp.basis, decompose=True)
+        with torch.no_grad():
+            typed_dataset = e3h(typed_dataset)
+
         if mode == "edge":
-            return self._E3edgespecies_stat(decay=decay)
+            return self._E3edgespecies_stat(typed_dataset=typed_dataset, decay=decay)
         elif mode == "node":
-            return self._E3nodespecies_stat()
+            return self._E3nodespecies_stat(typed_dataset=typed_dataset)
         else:
             raise ValueError("Not supported E3 statistics type.")
     
-    def _E3edgespecies_stat(self, decay):
+    def _E3edgespecies_stat(self, typed_dataset, decay):
         # we get the bond type marked dataset first
         idp = self.transform
-        typed_dataset = idp(self.data.to_dict())
+        typed_dataset = typed_dataset
 
         idp.get_irreps(no_parity=False)
         irrep_slices = idp.orbpair_irreps.slices()
@@ -319,16 +326,17 @@ class DefaultDataset(AtomicInMemoryDataset):
                     scalar_tensor = typed_hopping[bt][:, s]
                     scalars_per_irrep.append(scalar_tensor.squeeze(-1))
                 norms_per_irrep.append(norms)
-            typed_norm[bt] = norms_per_irrep
-            typed_scalar[bt] = scalars_per_irrep
+            # shape of typed_norm: (n_irreps, n_edges)
+            typed_norm[bt] = torch.stack(norms_per_irrep)
+            typed_scalar[bt] = torch.stack(scalars_per_irrep)
 
-            bt_ave = [torch.mean(norms).item() for norms in typed_norm[bt]]
+            bt_ave = torch.mean(typed_norm[bt], dim=1)
             typed_norm_ave[bt] = bt_ave
-            bt_std = [torch.std(norms).item() for norms in typed_norm[bt]]
+            bt_std = torch.std(typed_norm[bt], dim=1)
             typed_norm_std[bt] = bt_std
-            bt_scalar_ave = [torch.mean(scalar).item() for scalar in typed_scalar[bt]]
+            bt_scalar_ave = torch.mean(typed_scalar[bt], dim=1)
             typed_scalar_ave[bt] = bt_scalar_ave
-            bt_scalar_std = [torch.std(scalar).item() for scalar in typed_scalar[bt]]
+            bt_scalar_std = torch.std(typed_scalar[bt], dim=1)
             typed_scalar_std[bt] = bt_scalar_std
         
         if not decay:
@@ -341,20 +349,19 @@ class DefaultDataset(AtomicInMemoryDataset):
                 lengths_bt = typed_dataset["edge_lengths"][typed_dataset["edge_type"].flatten().eq(tp)]
                 sorted_lengths, indices = lengths_bt.sort() # from small to large
                 # sort the norms by irrep l
-                sorted_norms = [typed_norm[bt][i] for i in idp.orbpair_irreps.sort().inv]
+                sorted_norms = typed_norm[bt][idp.orbpair_irreps.sort().inv, :]
                 # sort the norms by edge length
-                for i_irrep, irrep_norms in enumerate(sorted_norms):
-                    sorted_norms[i_irrep] = irrep_norms[indices]
+                sorted_norms = sorted_norms[:, indices]
                 decay_bt["edge_length"] = sorted_lengths
                 decay_bt["norm_decay"] = sorted_norms
                 decay[bt] = decay_bt
             return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std, decay 
 
     
-    def _E3nodespecies_stat(self):
+    def _E3nodespecies_stat(self, typed_dataset):
         # we get the type marked dataset first
         idp = self.transform
-        typed_dataset = idp(self.data.to_dict())
+        typed_dataset = typed_dataset
 
         idp.get_irreps(no_parity=False)
         irrep_slices = idp.orbpair_irreps.slices()
@@ -389,16 +396,16 @@ class DefaultDataset(AtomicInMemoryDataset):
                     scalar_tensor = typed_onsite[at][:, s]
                     scalars_per_irrep.append(scalar_tensor.squeeze(-1))
                 norms_per_irrep.append(norms)
-            typed_norm[at] = norms_per_irrep
-            typed_scalar[at] = scalars_per_irrep
+            typed_norm[at] = torch.stack(norms_per_irrep)
+            typed_scalar[at] = torch.stack(scalars_per_irrep)
 
-            at_ave = [torch.mean(norms).item() for norms in typed_norm[at]]
+            at_ave = torch.mean(typed_norm[at], dim=1)
             typed_norm_ave[at] = at_ave
-            at_std = [torch.std(norms).item() for norms in typed_norm[at]]
+            at_std = torch.std(typed_norm[at], dim=1)
             typed_norm_std[at] = at_std
-            at_scalar_ave = [torch.mean(scalar).item() for scalar in typed_scalar[at]]
+            at_scalar_ave = torch.mean(typed_scalar[at], dim=1)
             typed_scalar_ave[at] = at_scalar_ave
-            at_scalar_std = [torch.std(scalar).item() for scalar in typed_scalar[at]]
+            at_scalar_std = torch.std(typed_scalar[at], dim=1)
             typed_scalar_std[at] = at_scalar_std
 
         return typed_norm_ave, typed_norm_std, typed_scalar_ave, typed_scalar_std
