@@ -368,13 +368,8 @@ def embedding():
 
     return Variant("method", [
             Argument("se2", dict, se2()),
-            Argument("baseline", dict, baseline()),
-            Argument("deeph-e3", dict, deephe3()),
-            Argument("e3baseline_5", dict, e3baselinev5()),
-            Argument("e3baseline_6", dict, e3baselinev5()),
             Argument("slem", dict, slem()),
             Argument("lem", dict, slem()),
-            Argument("e3baseline_nonlocal", dict, e3baselinev5()),
         ],optional=True, default_tag="se2", doc=doc_method)
 
 def se2():
@@ -401,127 +396,17 @@ def se2():
         Argument("n_axis", [int, None], optional=True, default=None, doc=doc_n_axis),
     ]
 
-
-def baseline():
-
-    doc_rs = ""
-    doc_rc = ""
-    doc_n_axis = ""
-    doc_radial_embedding = ""
-
-    doc_neurons = ""
-    doc_activation = ""
-    doc_if_batch_normalized = ""
-
-    radial_embedding = [
-        Argument("neurons", list, optional=False, doc=doc_neurons),
-        Argument("activation", str, optional=True, default="tanh", doc=doc_activation),
-        Argument("if_batch_normalized", bool, optional=True, default=False, doc=doc_if_batch_normalized),
-    ]
-
-    return [
-        Argument("p", [float, int], optional=False, doc=doc_rs),
-        Argument("rc", [float, int], optional=False, doc=doc_rc),
-        Argument("n_basis", int, optional=False, doc=doc_rc),
-        Argument("n_radial", int, optional=False, doc=doc_rc),
-        Argument("n_sqrt_radial", int, optional=False, doc=doc_rc),
-        Argument("n_layer", int, optional=False, doc=doc_rc),
-        Argument("radial_net", dict, sub_fields=radial_embedding, optional=False, doc=doc_radial_embedding),
-        Argument("hidden_net", dict, sub_fields=radial_embedding, optional=False, doc=doc_radial_embedding),
-        Argument("n_axis", [int, None], optional=True, default=None, doc=doc_n_axis),
-    ]
-
-def deephe3():
-    doc_irreps_embed = ""
-    doc_irreps_mid = ""
-    doc_lmax = ""
-    doc_n_basis = ""
-    doc_rc = ""
-    doc_n_layer = ""
-
-    return [
-            Argument("irreps_embed", str, optional=True, default="64x0e", doc=doc_irreps_embed),
-            Argument("irreps_mid", str, optional=True, default="64x0e+32x1o+16x2e+8x3o+8x4e+4x5o", doc=doc_irreps_mid),
-            Argument("lmax", int, optional=True, default=3, doc=doc_lmax),
-            Argument("n_basis", int, optional=True, default=128, doc=doc_n_basis),
-            Argument("rc", float, optional=False, doc=doc_rc),
-            Argument("n_layer", int, optional=True, default=3, doc=doc_n_layer),
-        ]
-
-def e3baseline():
-    doc_irreps_hidden = ""
-    doc_lmax = ""
-    doc_avg_num_neighbors = ""
-    doc_n_radial_basis = ""
-    doc_r_max = ""
-    doc_n_layers = ""
-    doc_env_embed_multiplicity = ""
-    doc_linear_after_env_embed = ""
-    doc_latent_resnet_update_ratios_learnable = ""
-    doc_latent_kwargs = ""
-
-    return [
-            Argument("irreps_hidden", str, optional=True, default="64x0e+32x1o+16x2e+8x3o+8x4e+4x5o", doc=doc_irreps_hidden),
-            Argument("lmax", int, optional=True, default=3, doc=doc_lmax),
-            Argument("avg_num_neighbors", [int, float], optional=True, default=50, doc=doc_avg_num_neighbors),
-            Argument("r_max", [float, int, dict], optional=False, doc=doc_r_max),
-            Argument("n_layers", int, optional=True, default=3, doc=doc_n_layers),
-            Argument("n_radial_basis", int, optional=True, default=3, doc=doc_n_radial_basis),
-            Argument("PolynomialCutoff_p", int, optional=True, default=6, doc="The order of polynomial cutoff function. Default: 6"),
-            Argument(
-                "latent_kwargs", dict,
-                optional={
-                "mlp_latent_dimensions": [128, 128, 256],
-                "mlp_nonlinearity": "silu",
-                "mlp_initialization": "uniform"
-            }, 
-            default=None, 
-            doc=doc_latent_kwargs
-            ),
-            Argument("env_embed_multiplicity", int, optional=True, default=1, doc=doc_env_embed_multiplicity),
-            Argument("linear_after_env_embed", bool, optional=True, default=False, doc=doc_linear_after_env_embed),
-            Argument("latent_resnet_update_ratios_learnable", bool, optional=True, default=False, doc=doc_latent_resnet_update_ratios_learnable)
-        ]
-
-def e3baselinev5():
-    doc_irreps_hidden = ""
-    doc_lmax = ""
-    doc_avg_num_neighbors = ""
-    doc_n_radial_basis = ""
-    doc_r_max = ""
-    doc_n_layers = ""
-    doc_env_embed_multiplicity = ""
-
-    return [
-            Argument("irreps_hidden", str, optional=False, doc=doc_irreps_hidden),
-            Argument("lmax", int, optional=False, doc=doc_lmax),
-            Argument("avg_num_neighbors", [int, float], optional=False, doc=doc_avg_num_neighbors),
-            Argument("r_max", [float, int, dict], optional=False, doc=doc_r_max),
-            Argument("n_layers", int, optional=False, doc=doc_n_layers),
-            Argument("n_radial_basis", int, optional=True, default=10, doc=doc_n_radial_basis),
-            Argument("PolynomialCutoff_p", int, optional=True, default=6, doc="The order of polynomial cutoff function. Default: 6"),
-            Argument("cutoff_type", str, optional=True, default="polynomial", doc="The type of cutoff function. Default: polynomial"),
-            Argument("env_embed_multiplicity", int, optional=True, default=1, doc=doc_env_embed_multiplicity),
-            Argument("tp_radial_emb", bool, optional=True, default=False, doc="Whether to use tensor product radial embedding."),
-            Argument("tp_radial_channels", list, optional=True, default=[128, 128], doc="The number of channels in tensor product radial embedding."),
-            Argument("latent_channels", list, optional=True, default=[128, 128], doc="The number of channels in latent embedding."),
-            Argument("latent_dim", int, optional=True, default=256, doc="The dimension of latent embedding."),
-            Argument("res_update", bool, optional=True, default=True, doc="Whether to use residual update."),
-            Argument("res_update_ratios", float, optional=True, default=0.5, doc="The ratios of residual update, should in (0,1)."),
-            Argument("res_update_ratios_learnable", bool, optional=True, default=False, doc="Whether to make the ratios of residual update learnable."),
-        ]
-
 def slem():
-    doc_irreps_hidden = ""
-    doc_avg_num_neighbors = ""
-    doc_n_radial_basis = ""
-    doc_r_max = ""
-    doc_n_layers = ""
-    doc_env_embed_multiplicity = ""
+    doc_irreps_hidden = "The hidden states feature sizes of the model. follows the convention of irreps of e3nn. For example: 32x0e+32x1o+16x2e+16x3o+16x4e+8x5o"
+    doc_avg_num_neighbors = "average number of neighbours in the enviroment, can be setted as a constant as float or int number, or constant per species as a list"
+    doc_n_radial_basis = "The number of radial basis functions used to embed the radial part of the environment."
+    doc_r_max = "The cutoff values of the radial basis functions (bonds length smaller than this would considered valid)."
+    doc_n_layers = "The number of layers of the model"
+    doc_env_embed_multiplicity = "numbers of the initilized embeddings of the spherical part of the environment neighbours"
 
     return [
             Argument("irreps_hidden", str, optional=False, doc=doc_irreps_hidden),
-            Argument("avg_num_neighbors", [int, float], optional=False, doc=doc_avg_num_neighbors),
+            Argument("avg_num_neighbors", [int, float, list], optional=False, doc=doc_avg_num_neighbors),
             Argument("r_max", [float, int, dict], optional=False, doc=doc_r_max),
             Argument("n_layers", int, optional=False, doc=doc_n_layers),
             
