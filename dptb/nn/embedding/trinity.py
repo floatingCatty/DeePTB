@@ -205,12 +205,14 @@ class Trinity(torch.nn.Module):
         self.out_node = Linear(self.layers[-1].irreps_out, self.idp.orbpair_irreps, shared_weights=True, internal_weights=True, biases=True)
 
         # additive three-center factorized term H^(3) = sum_C P_AC D_C P_CB, owned entirely by Trinity.
-        # Required by the 3b/2b+3b/full modes; its blocks are added in reduced-equivariant space in
-        # forward (see to_reduced) so the existing NNENV transform picks them up.
+        # The module (and hence its parameters) is built whenever a `three_center` config is given,
+        # *independent of* `mode`, so a checkpoint always carries the 2b+3b parameters and one can train
+        # progressively 2b -> 2b+3b -> full by reloading and only switching `mode` (the state_dict is
+        # identical across modes). `mode` (via use_3b) merely gates whether the term is *applied* in
+        # forward, and `freeze_2b3b` whether it trains. Its blocks are added in reduced-equivariant
+        # space (see to_reduced) so the existing NNENV transform picks them up.
         self.three_center = None
-        if self.use_3b:
-            assert three_center is not None, \
-                f"trinity mode {mode!r} needs a `three_center` config (projectors, er_max, ...)."
+        if three_center is not None:
             self.three_center = ThreeCenterFactorized(
                 basis=self.basis,
                 projectors=three_center["projectors"],
@@ -222,9 +224,13 @@ class Trinity(torch.nn.Module):
                 dtype=dtype,
                 device=device,
             )
-            if self.freeze_2b3b:
-                for param in self.three_center.parameters():
-                    param.requires_grad = False
+        else:
+            assert not self.use_3b, \
+                f"trinity mode {mode!r} needs a `three_center` config (projectors, er_max, ...)."
+
+        if self.freeze_2b3b and self.three_center is not None:
+            for param in self.three_center.parameters():
+                param.requires_grad = False
 
     @property
     def out_edge_irreps(self):
