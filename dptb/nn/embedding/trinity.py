@@ -24,6 +24,7 @@ from dptb.data.transforms import OrbitalMapper
 from ..type_encode.one_hot import OneHotAtomEncoding
 from dptb.nn.norm import SeperableLayerNorm
 from dptb.data.AtomicDataDict import with_edge_vectors, with_batch
+from dptb.nn.threecenter import ThreeCenterFactorized, EDGE_THREECENTER_KEY, NODE_THREECENTER_KEY
 from math import ceil
 
 @Embedding.register("trinity")
@@ -33,7 +34,7 @@ class Trinity(torch.nn.Module):
             basis: Dict[str, Union[str, list]]=None,
             idp: Union[OrbitalMapper, None]=None,
             # required params
-            only2b: bool=False,
+            mode: str="full",
             n_layers: int=3,
             n_radial_basis: int=10,
             r_max: float=5.0,
@@ -59,9 +60,10 @@ class Trinity(torch.nn.Module):
             dtype: Union[str, torch.dtype] = torch.float32,
             device: Union[str, torch.device] = torch.device("cpu"),
             universal: Optional[bool] = False,
+            three_center: Optional[dict] = None,
             **kwargs,
             ):
-        
+
         super(Trinity, self).__init__()
 
         irreps_hidden = o3.Irreps(irreps_hidden)
@@ -89,7 +91,18 @@ class Trinity(torch.nn.Module):
                 "mlp_initialization": "uniform"
             },
         self.latent_dim = latent_dim
-        self.only2b = only2b
+        # a single `mode` (Trinity-only; replaces only2b/exclusive) selects the output channels.
+        # Following the original convention the two-body base is *always* produced; the mode toggles
+        # the extra channels on top of it:
+        #   "2b"     : two-body base only
+        #   "3b"/"2b+3b" : add the three-body term
+        #   "full"   : add three-body + env (message passing) and freeze the 2b+3b params so only the
+        #              env trains on top.
+        assert mode in ("2b", "3b", "2b+3b", "full"), f"unknown trinity mode {mode!r}"
+        self.mode = mode
+        self.use_3b = mode in ("3b", "2b+3b", "full")
+        self.use_env = mode == "full"
+        self.freeze_2b3b = mode == "full"
             
         self.basis = self.idp.basis
         self.idp.get_irreps(no_parity=False)
@@ -150,7 +163,7 @@ class Trinity(torch.nn.Module):
             dtype=dtype,
         )
 
-        if not self.only2b:
+        if self.freeze_2b3b:
             for param in self.two_ness.parameters():
                 param.requires_grad = False
 
@@ -191,6 +204,28 @@ class Trinity(torch.nn.Module):
         self.out_edge = Linear(self.layers[-1].irreps_out, self.idp.orbpair_irreps, shared_weights=True, internal_weights=True, biases=True)
         self.out_node = Linear(self.layers[-1].irreps_out, self.idp.orbpair_irreps, shared_weights=True, internal_weights=True, biases=True)
 
+        # additive three-center factorized term H^(3) = sum_C P_AC D_C P_CB, owned entirely by Trinity.
+        # Required by the 3b/2b+3b/full modes; its blocks are added in reduced-equivariant space in
+        # forward (see to_reduced) so the existing NNENV transform picks them up.
+        self.three_center = None
+        if self.use_3b:
+            assert three_center is not None, \
+                f"trinity mode {mode!r} needs a `three_center` config (projectors, er_max, ...)."
+            self.three_center = ThreeCenterFactorized(
+                basis=self.basis,
+                projectors=three_center["projectors"],
+                idp=self.idp,
+                er_max=three_center.get("er_max", 5.0),
+                n_radial_basis=three_center.get("n_radial_basis", 8),
+                latent_channels=three_center.get("latent_channels", [64, 64]),
+                coupling_mode=three_center.get("coupling", "block_diag"),
+                dtype=dtype,
+                device=device,
+            )
+            if self.freeze_2b3b:
+                for param in self.three_center.parameters():
+                    param.requires_grad = False
+
     @property
     def out_edge_irreps(self):
         return self.idp.orbpair_irreps
@@ -222,7 +257,7 @@ class Trinity(torch.nn.Module):
         data[_keys.EDGE_ATTRS_KEY] = edge_twoness
         data[_keys.EDGE_FEATURES_KEY] = torch.zeros(edge_index.shape[1], self.idp.orbpair_irreps.dim, dtype=self.dtype, device=self.device)
         data[_keys.NODE_FEATURES_KEY] = torch.zeros(atom_type.shape[0], self.idp.orbpair_irreps.dim, dtype=self.dtype, device=self.device)
-        if not self.only2b:
+        if self.use_env:   # env / many-body message passing (only in "full" mode)
             for layer in self.layers:
                 latents, node_features, edge_features = \
                     layer(
@@ -240,6 +275,17 @@ class Trinity(torch.nn.Module):
 
             data[_keys.NODE_FEATURES_KEY] = self.out_node(node_features)
             data[_keys.EDGE_FEATURES_KEY] = torch.index_copy(data[_keys.EDGE_FEATURES_KEY], 0, active_edges, self.out_edge(edge_features))
+
+        # additive three-center factorized term (3b/2b+3b/full). It produces Hamiltonian blocks, but
+        # Trinity outputs reduced-equivariant features, so we add its CG-decomposition (to_reduced):
+        # NNENV's existing E3Hamiltonian transform then turns (env + three-center) into blocks together,
+        # while the always-present two-body base is added by NNENV from EDGE_ATTRS (original convention).
+        if self.use_3b:
+            assert _keys.ENV_INDEX_KEY in data, \
+                "trinity three_center needs the environment neighbour list; set er_max in the data options."
+            data = self.three_center(data)
+            data[_keys.EDGE_FEATURES_KEY] = data[_keys.EDGE_FEATURES_KEY] + self.three_center.to_reduced(data[EDGE_THREECENTER_KEY])
+            data[_keys.NODE_FEATURES_KEY] = data[_keys.NODE_FEATURES_KEY] + self.three_center.to_reduced(data[NODE_THREECENTER_KEY])
 
         return data
     

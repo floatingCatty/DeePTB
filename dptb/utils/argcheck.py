@@ -464,14 +464,18 @@ def test_data_options():
 
 def embedding():
     doc_method = "The parameters to define the embedding model."
-    doc_only2b = "Whether to train the model with 2b interaction as a model initialization."
+    doc_mode = ("Which channels the trinity model adds on top of the always-present two-body base "
+                "(replaces the old only2b/exclusive): '2b' = two-body only; '3b'/'2b+3b' = add the "
+                "three-body term; 'full' = add three-body + env (message passing) and freeze the 2b+3b "
+                "params so only the env trains. The 3b/2b+3b/full modes require a `three_center` block. "
+                "Default: 'full'.")
 
     return Variant("method", [
             Argument("se2", dict, se2()),
             Argument("deeph-e3", dict, deephe3()),
             Argument("slem", dict, slem()),
             Argument("lem", dict, slem()),
-            Argument("trinity", dict, slem()+[Argument("only2b", bool, optional=True, default=False, doc=doc_only2b)],),
+            Argument("trinity", dict, slem()+[Argument("mode", str, optional=True, default="full", doc=doc_mode), three_center()],),
         ],optional=True, default_tag="se2", doc=doc_method)
 
 def se2():
@@ -692,6 +696,26 @@ def model_options():
         nnsk(),
         dftbsk(),
         ], sub_variants=[], optional=True, doc=doc_model_options)
+
+def three_center():
+    doc_three_center = ("Optional additive three-center factorized term "
+                        "H^(3)_AB = sum_C P_AC D_C P_CB, a Trinity-embedding feature. The target "
+                        "blocks (A,B) follow the basis cutoff r_max; the projector reach A-C/C-B uses "
+                        "the environment cutoff `er_max` set here (which also builds the dataset's "
+                        "environment neighbour list).")
+    doc_er_max = ("Environment cutoff for the three-center projector reach (A-C, C-B). This single "
+                  "value is both the environment neighbour-list cutoff (er_max) and the smooth radial "
+                  "cutoff of the projector overlaps; the target (A,B) blocks still follow the basis r_max.")
+    return Argument("three_center", dict, sub_fields=[
+        Argument("projectors", dict, optional=False,
+                 doc="Per-species auxiliary projector basis on the central atom C, e.g. "
+                     "{'C': ['1s','2s','1p']}. Sets the projector count and l_max."),
+        Argument("er_max", [float, int], optional=False, doc=doc_er_max),
+        Argument("coupling", str, optional=True, default="block_diag",
+                 doc="Center coupling D_C form: 'block_diag' (default, rotation invariant), 'diag', or 'dense'."),
+        Argument("n_radial_basis", int, optional=True, default=8, doc="Bessel radial basis size for P."),
+        Argument("latent_channels", list, optional=True, default=[64, 64], doc="Hidden widths of the P-value MLP."),
+        ], sub_variants=[], optional=True, doc=doc_three_center)
 
 def dftbsk():
     doc_dftbsk = "The parameters to define the dftb sk model."
@@ -1622,6 +1646,9 @@ def get_cutoffs_from_model_options(model_options):
             er_max = embedding["rc"]
         elif embedding["method"] in ["slem", "lem", "trinity"]:
             r_max = embedding["r_max"]
+            # the trinity three-center term sets the environment neighbour-list cutoff via its er_max
+            if embedding["method"] == "trinity" and embedding.get("three_center") is not None:
+                er_max = embedding["three_center"]["er_max"]
         else:
             log.error("The method of embedding have not been defined in get cutoff functions")
             raise NotImplementedError("The method of embedding have not been defined in get cutoff functions")
