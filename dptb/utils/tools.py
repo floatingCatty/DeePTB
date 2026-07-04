@@ -151,6 +151,59 @@ def setup_seed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+def build_wrms_param_groups(model, lr: float, min_scale: float = 0.02, max_scale: float = 1.0):
+    """Build optimizer parameter groups with lr scaled by each block's weight RMS.
+
+    With Adam the *relative* step size of a block is ~ lr / |w|_rms, so blocks
+    initialized at very different weight scales train at very different relative
+    speeds under a single lr (measured 20x between the AtomicResNet prediction
+    heads, init std 1e-3, and the O(1)-initialized embedding stack). Scaling each
+    group's lr by its weight RMS (muP/LARS-style trust ratio, static at init)
+    equalizes the relative step across blocks.
+
+    Groups are the top-level submodules of the model (embedding descends one more
+    level so each message-passing layer is its own group). The reference scale is
+    the median group weight RMS, so typical blocks keep the base lr.
+    """
+    def group_key(name):
+        parts = name.split(".")
+        if len(parts) >= 3 and parts[0] == "embedding":
+            return ".".join(parts[:2])
+        return parts[0]
+
+    groups = {}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        groups.setdefault(group_key(name), []).append((name, p))
+
+    rms = {}
+    for key, named in groups.items():
+        # weight matrices only; biases/gains say nothing about the block's scale
+        ws = [p for n, p in named if p.ndim >= 2 and p.numel() > 1]
+        if len(ws) > 0:
+            sq_sum = sum(p.detach().pow(2).sum().item() for p in ws)
+            numel = sum(p.numel() for p in ws)
+            rms[key] = (sq_sum / numel) ** 0.5
+
+    finite = sorted(v for v in rms.values() if v > 1e-12)
+    ref = finite[len(finite) // 2] if len(finite) > 0 else 1.0
+
+    param_groups = []
+    for key, named in groups.items():
+        scale = 1.0
+        if key in rms and rms[key] > 1e-12:
+            scale = min(max(rms[key] / ref, min_scale), max_scale)
+        param_groups.append({
+            "params": [p for _, p in named],
+            "lr": lr * scale,
+            "name": key,
+            "lr_scale": scale,
+        })
+        if abs(scale - 1.0) > 1e-3:
+            log.info(f"param group '{key}': |w|_rms={rms.get(key, float('nan')):.4g}, lr scale {scale:.3g}")
+    return param_groups
+
 def get_optimizer(type: str, model_param, lr: float, **options: dict):
     if type == 'Adam':
         optimizer = optim.Adam(params=model_param, lr=lr, **options)
@@ -175,6 +228,24 @@ def get_lr_scheduler(type: str, optimizer: optim.Optimizer, **sch_options):
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, **sch_options)
     elif type == "cyclic":
         scheduler = optim.lr_scheduler.CyclicLR(optimizer=optimizer, **sch_options)
+    elif type == "warmup_cos":
+        # linear warmup (start_factor -> 1 over warmup_steps) then cosine to eta_min.
+        # Meant to be stepped per iteration: set train_options.update_lr_per_iter = true.
+        warmup_steps = sch_options.get("warmup_steps", 1000)
+        warmup = optim.lr_scheduler.LinearLR(
+            optimizer=optimizer,
+            start_factor=sch_options.get("start_factor", 1e-2),
+            end_factor=1.0,
+            total_iters=warmup_steps,
+        )
+        cosine = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer,
+            T_max=max(sch_options.get("T_max", 100000) - warmup_steps, 1),
+            eta_min=sch_options.get("eta_min", 0.0),
+        )
+        scheduler = optim.lr_scheduler.SequentialLR(
+            optimizer=optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+        )
     else:
         raise RuntimeError("Scheduler should be exp/linear/rop/cyclic..., not {}".format(type))
 

@@ -136,14 +136,26 @@ class Saver(Plugin):
     def _save(self, name, model, model_options, common_options, train_options):
         obj = {}
         obj.update({"config": {"model_options": model_options, "common_options": common_options, "train_options": train_options}})
+
+        ema = getattr(self.trainer, "ema", None)
+        if ema is not None:
+            # model_state_dict holds the EMA weights: they are what validation scored
+            # and what should be deployed. Raw weights are kept for exact restart.
+            raw_state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            with ema.average_parameters():
+                model_state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            obj.update({"raw_model_state_dict": raw_state_dict, "ema_state_dict": ema.state_dict()})
+        else:
+            model_state_dict = model.state_dict()
+
         obj.update(
             {
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": model_state_dict,
                 "task": self.trainer.task,
-                "optimizer_state_dict": self.trainer.optimizer.state_dict(), 
+                "optimizer_state_dict": self.trainer.optimizer.state_dict(),
                 "lr_scheduler_state_dict": self.trainer.lr_scheduler.state_dict(),
                 "epoch": self.trainer.ep,
-                "iteration":self.trainer.iter, 
+                "iteration":self.trainer.iter,
                 "stats": self.trainer.stats}
                 )
         f_path = os.path.join(self.checkpoint_path, name+".pth")

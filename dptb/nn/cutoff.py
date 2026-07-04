@@ -8,6 +8,7 @@ def cosine_cutoff(x: torch.Tensor, r_max: torch.Tensor, r_start_cos_ratio: float
 
     Broadcasts over r_max.
     """
+    r_max = r_max.to(x.device)  # tolerate an r_max tensor pinned to a different device than the data
     r_max, x = torch.broadcast_tensors(r_max.unsqueeze(-1), x.unsqueeze(0))
     r_decay: torch.Tensor = r_start_cos_ratio * r_max
     # for x < r_decay, clamps to 1, for x > r_max, clamps to 0
@@ -31,6 +32,7 @@ def polynomial_cutoff(
         Power used in envelope function
     """
     assert p >= 2.0
+    r_max = r_max.to(x.device)  # tolerate an r_max tensor pinned to a different device than the data
     r_max, x = torch.broadcast_tensors(r_max.unsqueeze(-1), x.unsqueeze(0))
     x = x / r_max
 
@@ -67,6 +69,8 @@ def boundary_envelope(r: torch.Tensor, r_max, onset: float = 0.95) -> torch.Tens
         1 - (10 t^3 - 15 t^4 + 6 t^5) = (1-t)^3 (6 t^2 + 3 t + 1),
     which is cancellation-free.
     """
+    if isinstance(r_max, torch.Tensor):
+        r_max = r_max.to(r.device)  # tolerate an r_max tensor pinned to a different device than the data
     t = ((r - onset * r_max) / ((1.0 - onset) * r_max)).clamp(0.0, 1.0)
     omt = 1.0 - t
     return omt * omt * omt * (6.0 * t * t + 3.0 * t + 1.0)

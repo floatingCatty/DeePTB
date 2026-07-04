@@ -22,7 +22,7 @@ from dptb.nn.tensor_product import SO2_Linear
 import math
 from dptb.data.transforms import OrbitalMapper
 from ..type_encode.one_hot import OneHotAtomEncoding
-from dptb.nn.norm import SeperableLayerNorm
+from dptb.nn.norm import SeperableLayerNorm, PerLGain
 from dptb.data.AtomicDataDict import with_edge_vectors, with_batch
 from dptb.nn.threecenter import ThreeCenterFactorized, EDGE_THREECENTER_KEY, NODE_THREECENTER_KEY
 from math import ceil
@@ -64,6 +64,7 @@ class Trinity(torch.nn.Module):
             freeze: Optional[Union[str, List[str]]] = None,
             so2_gate: bool = False,
             hermitian: bool = True,
+            spectral_balance: bool = False,
             **kwargs,
             ):
 
@@ -164,6 +165,7 @@ class Trinity(torch.nn.Module):
             r_start_cos_ratio=r_start_cos_ratio,
             PolynomialCutoff_p=PolynomialCutoff_p,
             cutoff_type=cutoff_type,
+            spectral_balance=spectral_balance,
             device=device,
             dtype=dtype,
         )
@@ -210,6 +212,7 @@ class Trinity(torch.nn.Module):
                 res_update_ratios=res_update_ratios,
                 res_update_ratios_learnable=res_update_ratios_learnable,
                 so2_gate=so2_gate,
+                spectral_balance=spectral_balance,
                 dtype=dtype,
                 device=device,
                 )
@@ -525,6 +528,7 @@ class InitLayer(torch.nn.Module):
             r_start_cos_ratio: float = 0.8,
             PolynomialCutoff_p: float = 6,
             cutoff_type: str = "polynomial",
+            spectral_balance: bool = False,
             device: Union[str, torch.device] = torch.device("cpu"),
             dtype: Union[str, torch.dtype] = torch.float32,
     ):
@@ -578,20 +582,22 @@ class InitLayer(torch.nn.Module):
 
         self.sln_n = SeperableLayerNorm(
             irreps=self.irreps_out,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
 
         self.sln_e = SeperableLayerNorm(
             irreps=self.irreps_out,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
@@ -741,6 +747,7 @@ class UpdateNode(torch.nn.Module):
         res_update_ratios_learnable: bool = False,
         avg_num_neighbors: Optional[float] = None,
         so2_gate: bool = False,
+        spectral_balance: bool = False,
         dtype: Union[str, torch.dtype] = torch.float32,
         device: Union[str, torch.device] = torch.device("cpu"),
     ):
@@ -767,20 +774,22 @@ class UpdateNode(torch.nn.Module):
 
         self.sln = SeperableLayerNorm(
             irreps=self.irreps_in,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
 
         self.sln_e = SeperableLayerNorm(
             irreps=self.edge_irreps_in,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
@@ -806,6 +815,10 @@ class UpdateNode(torch.nn.Module):
             irreps_gates, [act_gates[ir.p] for _, ir in irreps_gates],  # gates (scalars)
             irreps_gated  # gated tensors
         )
+
+        # P1: learnable per-l gain to counteract the Gate's l>0 attenuation. Init identity (1.0) so it
+        # does NOT disturb the data-based statistics head calibration at init (see PerLGain); off if None.
+        self.gain = PerLGain(self.activation.irreps_out, dtype=dtype, device=device) if spectral_balance else None
 
         self.tp = SO2_Linear(
             irreps_in=self.irreps_in+self.edge_irreps_in,
@@ -873,6 +886,8 @@ class UpdateNode(torch.nn.Module):
                 , dim=-1), edge_vector[active_edges], latents[active_edges], wigner=wigner) # full_out_irreps
 
         message = self.activation(message)
+        if self.gain is not None:
+            message = self.gain(message)
         message = self.lin_post(message)
         scalars = message[:, :self.irreps_out[0].dim]
 
@@ -925,6 +940,7 @@ class UpdateEdge(torch.nn.Module):
         res_update_ratios: Optional[List[float]] = None,
         res_update_ratios_learnable: bool = False,
         so2_gate: bool = False,
+        spectral_balance: bool = False,
         dtype: Union[str, torch.dtype] = torch.float32,
         device: Union[str, torch.device] = torch.device("cpu"),
     ):
@@ -962,6 +978,10 @@ class UpdateEdge(torch.nn.Module):
             irreps_gated  # gated tensors
         )
 
+        # P1: learnable per-l gain to counteract the Gate's l>0 attenuation. Init identity (1.0) so it
+        # does NOT disturb the data-based statistics head calibration at init (see PerLGain); off if None.
+        self.gain = PerLGain(self.activation.irreps_out, dtype=dtype, device=device) if spectral_balance else None
+
         self.tp = SO2_Linear(
             irreps_in=self.node_irreps_in+self.irreps_in+self.node_irreps_in,
             irreps_out=self.activation.irreps_in,
@@ -981,20 +1001,22 @@ class UpdateEdge(torch.nn.Module):
 
         self.sln_e = SeperableLayerNorm(
             irreps=self.irreps_in,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
 
         self.sln_n = SeperableLayerNorm(
             irreps=self.irreps_in,
-            eps=5e-3, 
-            affine=True, 
-            normalization='component', 
+            eps=5e-3,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=spectral_balance,
             dtype=self.dtype,
             device=self.device
         )
@@ -1062,6 +1084,8 @@ class UpdateEdge(torch.nn.Module):
         scalars = new_edge_features[:, :self.tp.irreps_out[0].dim]
         assert len(scalars.shape) == 2
         new_edge_features = self.activation(new_edge_features)
+        if self.gain is not None:
+            new_edge_features = self.gain(new_edge_features)
         new_edge_features = self.lin_post(new_edge_features)
 
         scalars = new_edge_features[:, :self.irreps_out[0].dim]
@@ -1118,6 +1142,7 @@ class Layer(torch.nn.Module):
         res_update_ratios: Optional[List[float]] = None,
         res_update_ratios_learnable: bool = False,
         so2_gate: bool = False,
+        spectral_balance: bool = False,
         dtype: Union[str, torch.dtype] = torch.float32,
         device: Union[str, torch.device] = torch.device("cpu"),
     ):
@@ -1148,6 +1173,7 @@ class Layer(torch.nn.Module):
             res_update_ratios=res_update_ratios,
             res_update_ratios_learnable=res_update_ratios_learnable,
             so2_gate=so2_gate,
+            spectral_balance=spectral_balance,
             dtype=dtype,
             device=device,
         )
@@ -1164,6 +1190,7 @@ class Layer(torch.nn.Module):
             res_update_ratios_learnable=res_update_ratios_learnable,
             avg_num_neighbors=avg_num_neighbors,
             so2_gate=so2_gate,
+            spectral_balance=spectral_balance,
             dtype=dtype,
             device=device,
         )

@@ -1,8 +1,9 @@
 import torch
 import logging
 from dptb.utils.tools import get_lr_scheduler, \
-get_optimizer, j_must_have
+get_optimizer, j_must_have, build_wrms_param_groups
 from dptb.nnops.base_trainer import BaseTrainer
+from dptb.nnops.ema import ExponentialMovingAverage
 from typing import Union, Optional
 from dptb.data import AtomicDataset, DataLoader, AtomicData
 from dptb.nn import build_model
@@ -28,9 +29,28 @@ class Trainer(BaseTrainer):
         
         # init the object
         self.model = model.to(self.device)
-        self.optimizer = get_optimizer(model_param=self.model.parameters(), **train_options["optimizer"])
+
+        # TF32 trades precision for speed; Hamiltonian targets need ~1e-4 relative
+        # accuracy on eV-scale channels, so it stays off unless explicitly enabled.
+        allow_tf32 = train_options.get("allow_tf32", False)
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+
+        if train_options.get("per_group_lr", False):
+            model_param = build_wrms_param_groups(self.model, lr=train_options["optimizer"]["lr"])
+        else:
+            model_param = self.model.parameters()
+        self.optimizer = get_optimizer(model_param=model_param, **train_options["optimizer"])
         self.lr_scheduler = get_lr_scheduler(optimizer=self.optimizer, **train_options["lr_scheduler"])  # add optmizer
         self.update_lr_per_iter = train_options["update_lr_per_iter"]
+        self.grad_clip_norm = train_options.get("grad_clip_norm", 0.0)
+
+        ema_decay = train_options.get("ema_decay", 0.0)
+        if ema_decay > 0:
+            self.ema = ExponentialMovingAverage(self.model.parameters(), decay=ema_decay)
+            log.info(f"weight EMA enabled with decay {ema_decay}; validation and checkpoints use averaged weights.")
+        else:
+            self.ema = None
         self.common_options = common_options
         self.train_options = train_options
         
@@ -134,8 +154,11 @@ class Trainer(BaseTrainer):
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        #TODO: add clip large gradient
+        if self.grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
         self.optimizer.step()
+        if self.ema is not None:
+            self.ema.update()
         if self.update_lr_per_iter:
             # set self.iter > 0 to ensure a valid
             if isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -147,8 +170,6 @@ class Trainer(BaseTrainer):
         state = {'field':'iteration', "train_loss": loss.detach(), "lr": self.optimizer.state_dict()["param_groups"][0]['lr']}
         self.call_plugins(queue_name='iteration', time=self.iter, **state)
         self.iter += 1
-
-        #TODO: add EMA
 
         return loss.detach()
     
@@ -193,7 +214,23 @@ class Trainer(BaseTrainer):
         for key in Trainer.object_keys:
             item = getattr(trainer, key, None)
             if item is not None:
-                item.load_state_dict(ckpt[key+"_state_dict"])
+                try:
+                    item.load_state_dict(ckpt[key+"_state_dict"])
+                except (ValueError, RuntimeError, KeyError) as e:
+                    # e.g. the checkpoint was trained without per_group_lr (a single
+                    # param group) and the new run uses grouped lrs, or vice versa.
+                    log.warning(f"Could not restore {key} state from checkpoint ({e}); starting {key} fresh.")
+
+        if trainer.ema is not None:
+            if "ema_state_dict" in ckpt:
+                try:
+                    trainer.ema.load_state_dict(ckpt["ema_state_dict"])
+                except ValueError as e:
+                    log.warning(f"Could not restore EMA state from checkpoint ({e}); re-initializing EMA from model weights.")
+            # the checkpoint's model_state_dict holds the EMA weights (they are what
+            # gets deployed); the raw training weights are stored separately.
+            if "raw_model_state_dict" in ckpt:
+                trainer.model.load_state_dict(ckpt["raw_model_state_dict"])
 
         return trainer
 # 
@@ -211,6 +248,14 @@ class Trainer(BaseTrainer):
         pass
 
     def validation(self, fast=True):
+        if self.ema is not None:
+            # validate (and hence select "best") with the averaged weights, which are
+            # also what Saver checkpoints -- keeps selection and deployment consistent.
+            with self.ema.average_parameters():
+                return self._validation_impl(fast=fast)
+        return self._validation_impl(fast=fast)
+
+    def _validation_impl(self, fast=True):
         with torch.no_grad():
             loss = torch.scalar_tensor(0., dtype=self.dtype, device=self.device)
             self.model.eval()

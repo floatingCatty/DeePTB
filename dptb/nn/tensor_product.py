@@ -161,9 +161,11 @@ class SO2_Linear(torch.nn.Module):
                 nn.init.constant_(fc.bias, 2.0)
                 self.gate_fc.append(fc)
         
-        # generate m mask
-        self.m_in_mask = torch.zeros(self.irreps_in.lmax+1, self.irreps_in.dim, dtype=torch.bool)
-        self.m_out_mask = torch.zeros(self.irreps_in.lmax+1, self.irreps_out.dim, dtype=torch.bool)
+        # generate m mask. Register as (non-persistent) buffers so model.to(device) moves them: these
+        # index the per-edge features in forward, and a plain CPU tensor attribute would mismatch the
+        # GPU data (crash / silent per-step CPU<->GPU sync). Derived from the irreps, so non-persistent.
+        self.register_buffer("m_in_mask", torch.zeros(self.irreps_in.lmax+1, self.irreps_in.dim, dtype=torch.bool), persistent=False)
+        self.register_buffer("m_out_mask", torch.zeros(self.irreps_in.lmax+1, self.irreps_out.dim, dtype=torch.bool), persistent=False)
         
         if self.irreps_in.dim <= self.irreps_out.dim:
             front = True

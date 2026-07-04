@@ -183,6 +183,101 @@ P5. **Identity residuals** when irreps match; wider radial basis (16–32) for t
 P6. **Parity-complete hidden irreps** (config) and, longer term, parity-restricted SO(2) maps for a
     true O(3) prior.
 
+### P2 + P3 — implemented (trainer hardening, opt-in, CPU-validated)
+
+Shipped as `train_options` flags, all defaulting to the previous behaviour so existing configs and
+checkpoints are unaffected:
+
+- `per_group_lr: true` (**P2**) — `build_wrms_param_groups` (`dptb/utils/tools.py`) splits the
+  optimizer into per-block groups with lr scaled by each block's weight RMS (trust ratio at init,
+  clamped to [0.02, 1.0], referenced to the median group RMS). On a full-mode Trinity this puts the
+  small-init AtomicResNet heads (`edge_prediction_h2`, `edge_prediction_s`, |w|_rms≈0.05) at lr scale
+  ≈0.077 while the O(1) embedding stack stays at 1.0 — a **13× measured spread**, exactly the
+  imbalance the audit flagged. Scales compose correctly with any scheduler (each group's base_lr is
+  scaled independently). Verified in `test_wrms_param_groups_*`.
+- `grad_clip_norm: <float>` (**P3**) — global-norm gradient clipping each step
+  (`clip_grad_norm_`); off at 0.0. Tames the loss spikes typical of batch_size=1 Hamiltonian fitting.
+- `ema_decay: <float>` (**P3**) — `ExponentialMovingAverage` (`dptb/nnops/ema.py`) of the weights,
+  with the standard `(1+t)/(10+t)` warmup on the effective decay. **Validation scores and Saver
+  checkpoints use the averaged weights** (`model_state_dict` = EMA), while the raw training weights
+  are stored under `raw_model_state_dict` for exact restart. This removes the single-iteration noise
+  from best-checkpoint selection (the failure mode where stage-2 `best.pth` was honestly worse than
+  `latest`). Verified end-to-end in `test_trainer_engages_hardening_and_checkpoints_ema`.
+- `lr_scheduler.type: warmup_cos` (**P3**) — linear warmup then cosine to `eta_min`
+  (`get_lr_scheduler`), meant to be stepped per-iteration (`update_lr_per_iter: true`). Replaces the
+  RoP-to-floor collapse. Verified in `test_warmup_cosine_shape`.
+- `allow_tf32: false` (**P3**, default) — TF32 matmuls are now explicitly disabled unless requested;
+  Hamiltonian targets need the precision.
+
+Restart is backward/forward compatible: optimizer/scheduler/EMA state restore under try/except and
+fall back to fresh init with a warning if the group structure changed (e.g. toggling `per_group_lr`).
+Tests: `dptb/tests/test_trainer_hardening.py` (10 CPU tests). On-data A/B on Al66O36 in
+`scratchpad/bench_p2p3.py`.
+
+**Honest benchmark caveat (measured).** A short A/B on Al66O36 (2b+3b mode, 150 iters, CPU, seed 42,
+lr 0.01) showed P2+P3 *slightly slower* than baseline in this regime: at iter 150, baseline
+0.0942 train / 0.0915 eval vs P2+P3 0.1025 / 0.1028. This is **expected and not a regression**:
+(i) `per_group_lr` *lowers* the lr on the small-init prediction heads, but in **2b+3b mode those
+heads are the dominant learnable path**, so slowing them slows the transient — P2's designed benefit
+is in **full mode**, where the audit measured the heads oscillating at a noise floor while the env
+stack crawls, and is a *late-training* stability gain, not a first-150-iter speedup; (ii) EMA-on-eval
+*lags* the raw weights during rapid initial descent (effective decay ≈0.94 by iter 150 averages the
+last ~18 steps), so eval-on-EMA looks worse early and only wins once the loss flattens and raw-weight
+noise dominates. The takeaway: **these are production-stability features whose payoff is at the
+full-mode, long-horizon, near-convergence regime the user actually trains in** (days on GPU toward
+5e-4), and they should be validated there — not on a short 2b+3b descent. They are OFF by default so
+no existing run changes. Recommended production use: `grad_clip_norm` + `ema_decay` + `warmup_cos`
+(low-risk, high-value at the final push) always; `per_group_lr` for full-mode runs, validated on GPU.
+
+### P1 — implemented behind `spectral_balance` (anti spectral-collapse)
+
+Shipped as the trinity embedding flag `spectral_balance: bool` (default **False**), affecting only the
+env (message-passing) pathway. Two coupled changes attack the two measured drivers of the collapse:
+
+- **Per-l normalization** in `SeperableLayerNorm` (`per_l=True`, `dptb/nn/norm.py`): each angular
+  momentum l is normalized by its OWN rotation-invariant RMS instead of the scalar-vs-pooled-l>0
+  split. The pooled split let high-l energy drain into low-l within the l>0 group across depth; per-l
+  forbids that. Uses variance-form eps `rsqrt(ms + eps²)`. **Adds no parameters** (the bucket
+  matrices are non-persistent buffers, rebuilt from the irreps).
+- **Post-gate per-l gain** (`PerLGain`, `dptb/nn/norm.py`) after each `Gate` in `UpdateNode`/
+  `UpdateEdge`: one learnable scalar per l>0 (shared over mul and m). **Init 1.0 (identity)** — see the
+  workflow-compatibility note below. Equivariant (scalar per irrep). Adds one param per l>0 per message
+  block (6 params for a 3-layer model) — the only state_dict change, so old checkpoints load with
+  `strict=False` (gains default to 1.0) and nothing else is missing.
+
+**Workflow compatibility — why the gain inits to identity, not 2.0.** The e3tb heads are calibrated by
+`E3statistics`, which is *purely data-based*: it sets `head.scale = target-Hamiltonian per-irrep norm`
+and `shift = target mean`, implicitly assuming the network features are ~unit at init. It does **not**
+forward the model, so it cannot absorb a change in feature magnitude, and (critically) it runs only on
+fresh-start and `init_model`, **never on restart**. An earlier gain init of 2.0 systematically doubled
+the l>0 features → head output 2× target → a worse, *uncorrectable* init (re-running `E3statistics`
+would not help — it re-derives the same data norms). Initializing the gain to identity keeps every
+entry path (fresh / `init_model` / restart) self-consistent while leaving the gain as a learnable DOF
+the optimizer can grow (most useful at the final layer, whose output has no downstream normalization).
+Verified end-to-end across all three paths in `test_full_workflow_fresh_restart_initmodel`.
+
+**Measured effect** (signal-propagation diagnostic at init, full mode, Al66O36,
+`scratchpad/bench_p1_signal.py`; gain identity, so this isolates **per-l normalization**). Baseline
+reproduces the collapse exactly (edge l=2 0.101→0.066 over 3 layers, node l=1 0.799→0.422, l=0 grows).
+With `spectral_balance`, per-l normalization raises the **node** high-l RMS **~2× at every layer**
+(node l=2 layer-0 0.34→0.79, node l=4 0.39→0.85) and modestly reduces the across-depth decay (node l=1
+−47%→−41%); **edge** features are essentially unchanged. The high-l/l=0 balance on the node track
+roughly doubles. Hermiticity and equivariance are preserved (`test_spectral_balance_*`).
+
+It stays **off by default**: per-l normalization changes the node feature distribution the data-based
+head calibration was tuned against, so the init loss is ~18% higher (0.42 vs 0.38 on Al66O36) — a
+different, self-consistent starting point, not an inconsistency. A/B-validate on the real GPU horizon
+(3-seed protocol) before making it a default.
+
+**Honest convergence A/B** (`scratchpad/bench_p1_converge.py`, full mode, Al66O36, 200 iters, plain
+Adam lr 5e-3, stats-init, everything else identical): P1 tracks baseline within noise — baseline
+0.377→0.0273, P1 0.422→0.0302; P1 starts ~18% higher (per-l changes the node feature distribution vs
+the data-based head calibration), briefly leads at iter 150 (0.0524 vs 0.0556), ends a hair behind.
+Like P2/P3, **the mechanism is confirmed (2× higher node high-l signal) but the payoff is not a
+short-horizon convergence win** — the collapse constrains the model's capacity to carry bond-anisotropy
+through depth *at convergence*, which a 200-iter CPU probe on a 3-frame set does not exercise (early
+loss is dominated by the larger low-l/scalar channels). Validate at the real horizon.
+
 ## Phase 3 (research directions)
 
 - **Long-range electrostatics channel** for junctions/interfaces: onsite levels track the local

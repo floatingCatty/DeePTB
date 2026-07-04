@@ -113,6 +113,10 @@ def train_options():
 
     doc_update_lr_per_iter = "Set true to update learning rate per-step. Default: false."
     doc_sliding_win_size = "Sliding window size for the average of the latest iterations' loss. Used for the reduce on plateau learning rate scheduler in case of the pairing of large dataset and small batch size. Default: `50`"
+    doc_grad_clip_norm = "If > 0, clip the global gradient norm to this value each step (torch.nn.utils.clip_grad_norm_). Stabilizes training against the loss spikes typical of batch_size=1 Hamiltonian fitting. Default: `0.0` (off)."
+    doc_ema_decay = "If > 0, maintain an exponential moving average of the model weights with this decay (e.g. `0.999`). Validation and checkpoints then use the averaged weights, removing single-iteration noise from best-checkpoint selection. Default: `0.0` (off)."
+    doc_per_group_lr = "If true, split the optimizer into per-block parameter groups with the learning rate scaled by each block's weight RMS (muP-style trust ratio at init). Equalizes the relative Adam step across blocks initialized at different scales (e.g. the small-init prediction heads vs the O(1) embedding stack). Default: `false`."
+    doc_allow_tf32 = "If true, allow TF32 matmuls on Ampere+ GPUs. Off by default because Hamiltonian targets need high relative precision. Default: `false`."
 
     doc_optimizer = "\
         The optimizer setting for selecting the gradient optimizer of model training. Optimizer supported includes `Adam`, `SGD` and `LBFGS` \n\n\
@@ -143,6 +147,10 @@ def train_options():
         Argument("sliding_win_size", int, optional=True, default=50, doc=doc_sliding_win_size),
         Argument("max_ckpt", int, optional=True, default=4, doc=doc_max_ckpt),
         Argument("valid_fast", bool, optional=True, default=True, doc="Set True to valid on the first batch of validation dataset, set False to valid the whole dataset. Default: True"),
+        Argument("grad_clip_norm", float, optional=True, default=0.0, doc=doc_grad_clip_norm),
+        Argument("ema_decay", float, optional=True, default=0.0, doc=doc_ema_decay),
+        Argument("per_group_lr", bool, optional=True, default=False, doc=doc_per_group_lr),
+        Argument("allow_tf32", bool, optional=True, default=False, doc=doc_allow_tf32),
 
         loss_options()
     ]
@@ -328,6 +336,19 @@ def CosineAnnealingLR():
         Argument("eta_min", float, optional=True, default=0, doc=doc_eta_min),
     ]
 
+def WarmupCosineLR():
+    doc_warmup_steps = "Number of linear warmup steps before cosine annealing begins. Default: 1000."
+    doc_start_factor = "lr starts at start_factor * base_lr and ramps to base_lr over warmup_steps. Default: 1e-2."
+    doc_T_max = "Total number of steps for the whole schedule (warmup + cosine). Default: 100000."
+    doc_eta_min = "Minimum learning rate at the end of the cosine phase. Default: 0."
+
+    return [
+        Argument("warmup_steps", int, optional=True, default=1000, doc=doc_warmup_steps),
+        Argument("start_factor", float, optional=True, default=1e-2, doc=doc_start_factor),
+        Argument("T_max", int, optional=True, default=100000, doc=doc_T_max),
+        Argument("eta_min", float, optional=True, default=0, doc=doc_eta_min),
+    ]
+
 def lr_scheduler():
     doc_type = "select type of lr_scheduler, support type includes `exp`, `linear`"
 
@@ -336,6 +357,7 @@ def lr_scheduler():
             Argument("linear", dict, LinearLR()),
             Argument("rop", dict, ReduceOnPlateau(), doc="rop: reduce on plateau"),
             Argument("cos", dict, CosineAnnealingLR(), doc="cos: cosine annealing"),
+            Argument("warmup_cos", dict, WarmupCosineLR(), doc="warmup_cos: linear warmup then cosine annealing (step per-iteration)"),
             Argument("cyclic", dict, CyclicLR(), doc="Cyclic learning rate")
         ],optional=True, default_tag="exp", doc=doc_type)
 
@@ -492,6 +514,14 @@ def embedding():
                          doc="Enforce hermiticity of the env edge channel exactly by averaging each same-shell-pair "
                              "irrep channel with (-1)^J times its reversed edge (parameter-free; the 2b/3b terms are "
                              "hermitian by construction). Default: True."),
+                Argument("spectral_balance", bool, optional=True, default=False,
+                         doc="P1 anti-spectral-collapse: normalize each angular momentum l with its own scale in the "
+                             "layer norms (per-l, variance-form eps) instead of the scalar-vs-pooled-l>0 split, and add a "
+                             "learnable per-l gain after each Gate (init 1.0 = identity, so it does not disturb the "
+                             "data-based statistics head calibration) that the optimizer can grow to counter the l>0 RMS "
+                             "decay over depth. Adds a few parameters (one gain per l per message block); off by default "
+                             "for checkpoint compatibility. Only affects the env (message-passing) pathway, i.e. "
+                             "mode='full'. Default: False."),
                 three_center(),
             ],),
         ],optional=True, default_tag="se2", doc=doc_method)

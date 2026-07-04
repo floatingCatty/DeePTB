@@ -13,12 +13,13 @@ class SeperableLayerNorm(nn.Module):
         3. Do not normalize separately for different L (L > 0).
     '''
     def __init__(
-            self, 
-            irreps, 
-            eps=1e-5, 
-            affine=True, 
-            normalization='component', 
+            self,
+            irreps,
+            eps=1e-5,
+            affine=True,
+            normalization='component',
             std_balance_degrees=True,
+            per_l=False,
             dtype: Union[str, torch.dtype] = torch.float32,
             device: Union[str, torch.device] = torch.device("cpu")
             ):
@@ -37,6 +38,12 @@ class SeperableLayerNorm(nn.Module):
         self.affine = affine
         self.num_scalar = 0
         self.std_balance_degrees = std_balance_degrees
+        # per_l (P1): normalize each angular momentum l with its OWN (rotation-invariant) scale
+        # instead of the scalar-vs-pooled-l>0 split. The pooled split lets high-l energy drain into
+        # low-l within the l>0 group across depth (measured spectral collapse); per-l normalization
+        # forbids that. Also uses variance-form eps (rsqrt(ms + eps^2)) so a near-zero row is floored
+        # at 1/eps rather than being amplified by the eps-added-to-norm form. Adds no parameters.
+        self.per_l = per_l
         self.device = device
         self.dtype = dtype
 
@@ -88,8 +95,49 @@ class SeperableLayerNorm(nn.Module):
         else:
             self.balance_degree_weight = None
 
+        if self.per_l:
+            # bucket every component (and every irrep, for the affine) by its l value. One
+            # normalization scale per distinct l. `comp_onehot` [dim, num_buckets] is the 0/1
+            # component->bucket matrix (mean-square per bucket = (x^2 @ comp_onehot) / counts).
+            l_to_bucket = {}
+            comp_bucket = []
+            irrep_bucket = []
+            for mul, ir in self.irreps:
+                b = l_to_bucket.setdefault(ir.l, len(l_to_bucket))
+                comp_bucket += [b] * (mul * ir.dim)
+                irrep_bucket += [b] * mul
+            num_buckets = len(l_to_bucket)
+            comp_bucket = torch.as_tensor(comp_bucket, dtype=torch.long, device=self.device)
+            comp_onehot = torch.zeros(comp_bucket.shape[0], num_buckets, device=self.device, dtype=self.dtype)
+            comp_onehot[torch.arange(comp_bucket.shape[0]), comp_bucket] = 1.0
+            # non-persistent: fully determined by `irreps`, rebuilt in __init__, kept out of state_dict
+            self.register_buffer("perl_comp_onehot", comp_onehot, persistent=False)
+            self.register_buffer("perl_bucket_count", comp_onehot.sum(0), persistent=False)   # [num_buckets]
+            self.register_buffer("perl_irrep_bucket", torch.as_tensor(irrep_bucket, dtype=torch.long, device=self.device), persistent=False)
+            # the l=0 bucket, whose components get centered before scaling
+            self.perl_scalar_bucket = l_to_bucket.get(0, -1)
+
     def __repr__(self):
-        return f"{self.__class__.__name__}(irreps={self.irreps}, eps={self.eps}, std_balance_degrees={self.std_balance_degrees})"
+        return f"{self.__class__.__name__}(irreps={self.irreps}, eps={self.eps}, std_balance_degrees={self.std_balance_degrees}, per_l={self.per_l})"
+
+    def _forward_per_l(self, x):
+        # x: [N, dim]. Center scalars, then normalize each l by its own invariant RMS.
+        shift_ge0 = self.shift_index.ge(0)
+        x = x + 0.
+        if self.perl_scalar_bucket >= 0:
+            feature_mean = x[:, shift_ge0].mean(dim=1, keepdim=True)
+            x[:, shift_ge0] = x[:, shift_ge0] - feature_mean
+
+        ms = (x.pow(2) @ self.perl_comp_onehot) / self.perl_bucket_count  # [N, num_buckets]
+        inv = (ms + self.eps * self.eps).rsqrt()                          # variance-form eps
+
+        if self.affine:
+            weight = self.affine_weight * inv[:, self.perl_irrep_bucket]  # [N, num_irreps]
+            x = x * weight[:, self.scale_index]
+            x[:, shift_ge0] = x[:, shift_ge0] + self.affine_bias
+        else:
+            x = x * (inv @ self.perl_comp_onehot.t())                     # [N, dim]
+        return x
 
 
     @torch.amp.autocast(device_type="cuda",enabled=False)
@@ -97,6 +145,8 @@ class SeperableLayerNorm(nn.Module):
         '''
             Assume input is of shape [N, sphere_basis, C]
         '''
+        if self.per_l:
+            return self._forward_per_l(x)
         batch, dim = x.shape
         x = x.reshape(batch, dim)  # [batch, stacked features]
 
@@ -140,6 +190,59 @@ class SeperableLayerNorm(nn.Module):
         x[:, self.shift_index.ge(0)] = x[:, self.shift_index.ge(0)] + self.affine_bias
 
         return x
+
+class PerLGain(nn.Module):
+    """Learnable per-l scalar gain on l>0 irreps (identity on l=0), for the flattened [N, dim] layout.
+
+    P1: the equivariant `Gate` multiplies every l>0 channel by a sigmoid whose mean is ~0.5 at init,
+    so each message-passing layer attenuates l>0 by ~2x while scalars pass through — a first-order
+    driver of the measured spectral collapse (high-l RMS decays 30-60% over depth). A learnable per-l
+    gain gives the model a cheap degree of freedom to counteract that attenuation.
+
+    IMPORTANT — init defaults to 1.0 (identity). The e3tb prediction heads are calibrated by a purely
+    data-based E3statistics that sets head.scale = target-Hamiltonian norm and assumes the network
+    features are ~unit at init; a gain != 1 would systematically rescale the features and break that
+    calibration (E3statistics does not forward the model, so it cannot absorb the change, and it does
+    not run on restart at all). Initializing to identity keeps every training path (fresh / init_model
+    / restart) consistent while letting the optimizer grow the gain if larger l>0 helps. Multiplying an
+    irrep by a scalar is equivariant. One parameter per distinct l>0 (shared across mul and m).
+    """
+    def __init__(self, irreps, init=1.0,
+                 dtype: Union[str, torch.dtype] = torch.float32,
+                 device: Union[str, torch.device] = torch.device("cpu")):
+        super().__init__()
+        if isinstance(dtype, str):
+            dtype = getattr(torch, dtype)
+        if isinstance(device, str):
+            device = torch.device(device)
+        self.irreps = irreps if isinstance(irreps, o3.Irreps) else o3.Irreps(irreps)
+        gain_index = []       # per-component index into the gain vector; -1 for l==0
+        l_to_gain = {}
+        for mul, ir in self.irreps:
+            if ir.l == 0:
+                gain_index += [-1] * (mul * ir.dim)
+            else:
+                g = l_to_gain.setdefault(ir.l, len(l_to_gain))
+                gain_index += [g] * (mul * ir.dim)
+        self.n_gain = len(l_to_gain)
+        if self.n_gain > 0:
+            self.gain = nn.Parameter(torch.full((self.n_gain,), float(init), dtype=dtype, device=device))
+        else:
+            self.register_parameter("gain", None)
+        # non-persistent: determined by `irreps`, rebuilt in __init__, kept out of state_dict
+        self.register_buffer("gain_index", torch.as_tensor(gain_index, dtype=torch.long, device=device), persistent=False)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(irreps={self.irreps}, n_gain={self.n_gain})"
+
+    def forward(self, x):
+        if self.gain is None:
+            return x
+        idx = self.gain_index
+        g = self.gain[idx.clamp(min=0)]                                  # [dim]
+        g = torch.where(idx.ge(0), g, torch.ones_like(g))               # l==0 -> gain 1
+        return x * g
+
 
 @compile_mode("unsupported")
 class TypeNorm(nn.Module):

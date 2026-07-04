@@ -375,7 +375,7 @@ class EigHamLoss(nn.Module):
         # mask the data
 
         if self.onsite_shift:
-            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0]))
+            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0], device=data[AtomicDataDict.POSITIONS_KEY].device))
             mu_n, mu_e, norm_ss_n, norm_ss_e = shift_mu(data=data, ref_data=ref_data,idp=self.idp)
             
             if batch.max() == 0: # when batchsize is zero
@@ -498,7 +498,7 @@ class HamilLossAbs(nn.Module):
     def forward(self, data: AtomicDataDict, ref_data: AtomicDataDict):
         # mask the data
         if self.onsite_shift:
-            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0]))
+            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0], device=data[AtomicDataDict.POSITIONS_KEY].device))
             mu_n, mu_e, norm_ss_n, norm_ss_e = shift_mu(data=data, ref_data=ref_data,idp=self.idp)
 
             if batch.max() == 0: # when batchsize is zero
@@ -593,7 +593,7 @@ class HamilLossBlas(nn.Module):
     def forward(self, data: AtomicDataDict, ref_data: AtomicDataDict):
         # mask the data
         if self.onsite_shift:
-            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0]))
+            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0], device=data[AtomicDataDict.POSITIONS_KEY].device))
             mu_n, mu_e, norm_ss_n, norm_ss_e = shift_mu(data=data, ref_data=ref_data,idp=self.idp)
             
             if batch.max() == 0: # when batchsize is zero
@@ -716,8 +716,8 @@ class HamilLossWT(nn.Module):
             assert idp is not None, "Either basis or idp should be provided."
             self.idp = idp
 
-        self.onsite_weight = torch.ones(idp.num_types)
-        self.hopping_weight = torch.ones(len(idp.bond_types))
+        self.onsite_weight = torch.ones(idp.num_types, device=self.device)
+        self.hopping_weight = torch.ones(len(idp.bond_types), device=self.device)
         if isinstance(onsite_weight, float) or isinstance(onsite_weight, int):
             self.onsite_weight *= onsite_weight
         elif isinstance(onsite_weight, dict):
@@ -741,7 +741,7 @@ class HamilLossWT(nn.Module):
         # mask the data
 
         if self.onsite_shift:
-            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0]))
+            batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0], device=data[AtomicDataDict.POSITIONS_KEY].device))
             mu_n, mu_e, norm_ss_n, norm_ss_e = shift_mu(data=data, ref_data=ref_data,idp=self.idp)
 
             if batch.max() == 0: # when batchsize is zero
@@ -873,7 +873,7 @@ class HamilLossAnalysis(object):
     
     def __call__(self, data: AtomicDataDict, ref_data: AtomicDataDict, running_avg: bool=False):
 
-        batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0]))
+        batch = data.get("batch", torch.zeros(data[AtomicDataDict.POSITIONS_KEY].shape[0], device=data[AtomicDataDict.POSITIONS_KEY].device))
         if self.onsite_shift:
             mu_n, mu_e, norm_ss_n, norm_ss_e = shift_mu(data=data, ref_data=ref_data,idp=self.idp)
 

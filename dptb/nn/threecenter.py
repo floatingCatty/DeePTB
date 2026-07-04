@@ -174,8 +174,11 @@ class ThreeCenterFactorized(nn.Module):
 
         # reduced values from two-body invariants [onehot(center), onehot(neighbour), bessel(R_AC)],
         # smoothly cut off at the environment cutoff er_max (the ENV neighbour-list cutoff).
-        self.bessel = BesselBasis(r_max=torch.tensor(er_max, dtype=dtype), num_basis=n_radial_basis, trainable=True)
-        self.er_max = torch.tensor(er_max, dtype=dtype)
+        self.bessel = BesselBasis(r_max=torch.tensor(er_max, dtype=dtype, device=device), num_basis=n_radial_basis, trainable=True)
+        # register as a buffer (with device) so model.to(device) moves it; a plain tensor attribute
+        # stays on CPU and breaks the polynomial_cutoff below when the model runs on GPU. Non-persistent:
+        # it is fully determined by the `er_max` config, so it stays out of the checkpoint (no layout change).
+        self.register_buffer("er_max", torch.tensor(er_max, dtype=dtype, device=device), persistent=False)
         self.reduced_mlp = ScalarMLPFunction(
             mlp_input_dimension=2 * self.num_types + n_radial_basis,
             mlp_output_dimension=self.reduced_dim,

@@ -484,6 +484,132 @@ def test_so2_gate_wigner_cache_and_hermitian():
     assert ef.abs().max() > 0                                          # nontrivial output
 
 
+def test_three_center_tensors_move_with_module():
+    # Device-safety regression: every tensor the three-center forward touches (notably `er_max`, which
+    # feeds polynomial_cutoff) must be a registered buffer/parameter so `model.to(device)` moves it.
+    # A plain tensor attribute stays on CPU and crashes a GPU run (RuntimeError: two devices cuda/cpu).
+    from dptb.nn.build import build_model
+    common = {"basis": {"C": ["2s", "2p"]}, "device": "cpu", "dtype": "float32", "overlap": False}
+    mo = {"embedding": {"method": "trinity", "r_max": 6.0, "irreps_hidden": "16x0e+16x1o+8x2e",
+                        "n_layers": 2, "avg_num_neighbors": 10, "mode": "full",
+                        "three_center": {"projectors": {"C": ["1s", "1p"]}, "er_max": 6.0}},
+          "prediction": {"method": "e3tb", "neurons": [16, 16]}}
+    torch.manual_seed(0)
+    tc = build_model(None, mo, common).embedding.three_center
+    assert "er_max" in dict(tc.named_buffers()), "er_max must be a registered buffer, not a plain attr"
+    # no float/double CPU tensor should be a *plain attribute* (would not follow .to(device))
+    for name, val in vars(tc).items():
+        if isinstance(val, torch.Tensor) and val.is_floating_point():
+            raise AssertionError(f"three_center.{name} is a plain tensor attribute; register it as a buffer")
+    # .to(dtype) is an in-module tensor move (same mechanism as .to(device)); er_max must follow
+    tc.to(torch.float64)
+    assert dict(tc.named_buffers())["er_max"].dtype == torch.float64
+
+    # the shared cutoff helpers coerce a mismatched r_max onto the data device (defensive second layer)
+    from dptb.nn.cutoff import polynomial_cutoff, cosine_cutoff, boundary_envelope
+    r = torch.linspace(0.1, 5.0, 9)
+    assert polynomial_cutoff(r, torch.tensor([5.0])).shape[-1] == 9
+    assert cosine_cutoff(r, torch.tensor([5.0])).shape[-1] == 9
+    assert boundary_envelope(r, torch.tensor(5.0)).shape[0] == 9   # tensor r_max
+    assert boundary_envelope(r, 5.0).shape[0] == 9                 # float r_max
+
+
+def test_so2_linear_masks_are_buffers():
+    # SO2_Linear.m_in_mask/m_out_mask index the per-edge features every forward; they must be buffers
+    # (SO2_Linear has no device arg, so it relies on model.to(device) to move them). A plain CPU
+    # tensor attribute would mismatch GPU data.
+    from dptb.nn.build import build_model
+    common = {"basis": {"C": ["2s", "2p"]}, "device": "cpu", "dtype": "float32", "overlap": False}
+    mo = {"embedding": {"method": "trinity", "r_max": 6.0, "irreps_hidden": "16x0e+16x1o+8x2e",
+                        "n_layers": 2, "avg_num_neighbors": 10, "mode": "full", "so2_gate": True,
+                        "three_center": {"projectors": {"C": ["1s", "1p"]}, "er_max": 6.0}},
+          "prediction": {"method": "e3tb", "neurons": [16, 16]}}
+    torch.manual_seed(0)
+    model = build_model(None, mo, common)
+    so2s = [mod for mod in model.modules() if type(mod).__name__ == "SO2_Linear"]
+    assert so2s, "expected SO2_Linear modules in a full-mode trinity"
+    for so2 in so2s:
+        bufs = dict(so2.named_buffers())
+        assert "m_in_mask" in bufs and "m_out_mask" in bufs, "m_in/out_mask must be registered buffers"
+        assert bufs["m_in_mask"].dtype == torch.bool
+
+
+def test_spectral_balance_modules_equivariant():
+    # P1 building blocks: per-l SeperableLayerNorm and PerLGain must be E(3)-equivariant (they scale
+    # each irrep by a rotation-invariant factor / per-l constant), and do what they claim.
+    from e3nn import o3
+    from dptb.nn.norm import SeperableLayerNorm, PerLGain
+    torch.manual_seed(0)
+    irreps = o3.Irreps("8x0e+8x1o+4x2e+2x3o")
+    x = torch.randn(64, irreps.dim, dtype=torch.float64)
+    R = o3.rand_matrix().to(torch.float64)
+    D = irreps.D_from_matrix(R)
+
+    sln = SeperableLayerNorm(irreps, eps=5e-3, affine=True, per_l=True, dtype=torch.float64)
+    assert torch.allclose(sln(x @ D.T), sln(x) @ D.T, atol=1e-8)
+
+    # unaffine per-l norm sends each l to ~unit RMS independently
+    sln0 = SeperableLayerNorm(irreps, eps=1e-6, affine=False, per_l=True, dtype=torch.float64)
+    y = sln0(x); off = 0
+    for mul, ir in sln0.irreps:
+        d = mul * ir.dim
+        assert abs(y[:, off:off + d].pow(2).mean().sqrt().item() - 1.0) < 0.05
+        off += d
+
+    g = PerLGain(irreps, init=2.0, dtype=torch.float64)
+    assert torch.allclose(g(x @ D.T), g(x) @ D.T, atol=1e-10)      # exactly equivariant
+    off = 0
+    for mul, ir in irreps:
+        d = mul * ir.dim
+        ratio = (g(x)[:, off:off + d] / x[:, off:off + d]).mean().item()
+        assert abs(ratio - (1.0 if ir.l == 0 else 2.0)) < 1e-6       # identity on l=0, x2 on l>0
+        off += d
+
+
+def test_spectral_balance_model_compat_and_hermitian():
+    # enabling spectral_balance: (a) adds ONLY the learnable per-l gains to the state_dict (norm
+    # buckets are non-persistent buffers); (b) an old checkpoint still loads (strict=False) with only
+    # the gains missing; (c) the exact hermiticity constraint on the env channel is preserved.
+    from dptb.nn.build import build_model
+    common = {"basis": {"C": ["2s", "2p"]}, "device": "cpu", "dtype": "float32", "overlap": False, "seed": 42}
+    def mk(sb):
+        mo = {"embedding": {"method": "trinity", "r_max": 6.0, "irreps_hidden": "16x0e+16x1o+8x2e",
+                            "n_layers": 2, "avg_num_neighbors": 10, "mode": "full", "spectral_balance": sb,
+                            "three_center": {"projectors": {"C": ["1s", "1p"]}, "er_max": 6.0}},
+              "prediction": {"method": "e3tb", "neurons": [16, 16]}}
+        torch.manual_seed(0)
+        return build_model(None, mo, common)
+
+    m0, m1 = mk(False), mk(True)
+    extra = set(m1.state_dict()) - set(m0.state_dict())
+    assert extra and all(k.endswith(".gain.gain") for k in extra), sorted(extra)
+    assert not (set(m0.state_dict()) - set(m1.state_dict()))          # nothing removed
+    missing, unexpected = m1.load_state_dict(m0.state_dict(), strict=False)
+    assert not unexpected and all(k.endswith(".gain.gain") for k in missing)
+
+    # the gains MUST init to identity (1.0): the data-based E3statistics sets head.scale = target
+    # norm assuming ~unit features, so a non-identity gain would break that calibration on fresh
+    # start (and E3statistics never re-forwards the model, nor runs on restart). Reload m1 fresh
+    # since the strict=False load above overwrote it with m0's (absent) gains -> defaults.
+    m1 = mk(True)
+    for k in (set(m1.state_dict()) - set(m0.state_dict())):
+        assert torch.allclose(m1.state_dict()[k], torch.ones_like(m1.state_dict()[k])), k
+
+    # hermiticity preserved with spectral_balance on
+    m1.transform = False
+    torch.manual_seed(1)
+    pos = torch.randn(5, 3) * 2.0
+    dd = AtomicData.to_AtomicDataDict(AtomicData.from_points(
+        pos=pos, r_max=6.0, er_max=6.0, pbc=False, atomic_numbers=torch.full((5,), 6, dtype=torch.long)))
+    with torch.no_grad():
+        out = m1(dd)
+    ef = out[AtomicDataDict.EDGE_FEATURES_KEY]
+    rev = m1.embedding._reversed_edges(out)
+    hm, hs = m1.embedding.herm_mask, m1.embedding.herm_sign
+    assert torch.allclose(ef[:, hm], hs * ef[rev][:, hm], atol=1e-5)
+    assert ef.abs().max() > 0
+
+
 def test_boundary_envelope_dtype_stability():
     # Edges within the last ~5% of r_max used to be numerically unstable: the p=6 polynomial cutoff
     # evaluated at r/r_max ~ 1 suffers catastrophic cancellation in float32 (absolute noise ~3e-6 vs
