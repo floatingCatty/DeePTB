@@ -466,16 +466,34 @@ def embedding():
     doc_method = "The parameters to define the embedding model."
     doc_mode = ("Which channels the trinity model adds on top of the always-present two-body base "
                 "(replaces the old only2b/exclusive): '2b' = two-body only; '3b'/'2b+3b' = add the "
-                "three-body term; 'full' = add three-body + env (message passing) and freeze the 2b+3b "
-                "params so only the env trains. The 3b/2b+3b/full modes require a `three_center` block. "
-                "Default: 'full'.")
+                "three-body term; 'full' = add three-body + env (message passing). The 3b/2b+3b/full "
+                "modes require a `three_center` block. Default: 'full'.")
+    doc_freeze = ("Which trainable blocks of the trinity model to hold fixed (requires_grad=False), any "
+                  "subset of ['2b','3b','env']: '2b' = two-body SK term, '3b' = three-center term, "
+                  "'env' = many-body message-passing pathway. This is orthogonal to `mode` (which only "
+                  "selects which channels are applied), enabling progressive training, e.g. train 2b, "
+                  "then freeze ['2b'] and train 3b, then freeze ['2b','3b'] and train env. If unset "
+                  "(null), the default keeps the historical behaviour: 'full' freezes ['2b','3b'] so "
+                  "only env trains, other modes freeze nothing. Pass [] to train everything.")
 
     return Variant("method", [
             Argument("se2", dict, se2()),
             Argument("deeph-e3", dict, deephe3()),
             Argument("slem", dict, slem()),
             Argument("lem", dict, slem()),
-            Argument("trinity", dict, slem()+[Argument("mode", str, optional=True, default="full", doc=doc_mode), three_center()],),
+            Argument("trinity", dict, slem()+[
+                Argument("mode", str, optional=True, default="full", doc=doc_mode),
+                Argument("freeze", [list, None], optional=True, default=None, doc=doc_freeze),
+                Argument("so2_gate", bool, optional=True, default=False,
+                         doc="Gate every |m|>0 SO(2) channel of the message-passing tensor products with a sigmoid of "
+                             "the in-frame m=0 components (QHNetV2-style in-frame nonlinearity). Adds a small number of "
+                             "parameters; off by default for checkpoint compatibility."),
+                Argument("hermitian", bool, optional=True, default=True,
+                         doc="Enforce hermiticity of the env edge channel exactly by averaging each same-shell-pair "
+                             "irrep channel with (-1)^J times its reversed edge (parameter-free; the 2b/3b terms are "
+                             "hermitian by construction). Default: True."),
+                three_center(),
+            ],),
         ],optional=True, default_tag="se2", doc=doc_method)
 
 def se2():
@@ -862,6 +880,9 @@ def loss_options():
 
     hamil = [
         Argument("onsite_shift", bool, optional=True, default=False, doc="Whether to use onsite shift in loss function. Default: False"),
+        Argument("trace_weight", [int, float], optional=True, default=0., doc="Weight of the TraceGrad-style invariant auxiliary "
+                 "loss supervising T = tr(H_b H_b^dagger) per irrep block (currently honored by `hamil_abs`; auto-balanced: "
+                 "total = loss_H + trace_weight * no_grad(loss_H/loss_T) * loss_T). 0 disables. A good starting value is 1.0."),
     ]
 
     wt = [

@@ -65,10 +65,18 @@ argcheck error.
 
 A single trinity `mode` (Trinity-only; replaces the old `only2b`/`exclusive`) selects the channels on
 top of the always-present two-body base: `"2b"` = 2b only; `"3b"`/`"2b+3b"` = add the three-body term;
-`"full"` = add three-body + env (message passing) and freeze the 2b+3b params so only the env trains.
-Following the original convention the 2b base is always produced by NNENV, so `deeptb.py` is untouched;
-the 3b/2b+3b/full modes require a `three_center` block, and the projector reach needs the environment
-neighbour list, so `er_max` must be set.
+`"full"` = add three-body + env (message passing). Following the original convention the 2b base is
+always produced by NNENV, so `deeptb.py` is untouched; the 3b/2b+3b/full modes require a `three_center`
+block, and the projector reach needs the environment neighbour list, so `er_max` must be set. The
+`three_center` module (hence its parameters) is built whenever the block is configured, *independent of*
+`mode`, so the `state_dict` is identical across modes and one can warm-start progressively.
+
+Trainability is controlled by a separate, orthogonal `freeze` list (any subset of `["2b","3b","env"]`)
+that sets `requires_grad=False` on the two-body term, the three-center term, and/or the message-passing
+pathway respectively. This makes progressive training explicit — e.g. train `2b`, then `freeze:["2b"]`
+with `mode:"2b+3b"` to train only the three-center term, then `freeze:["2b","3b"]` with `mode:"full"` to
+train only env. If `freeze` is unset the historical default is kept: `"full"` freezes `["2b","3b"]`
+(train only env) and every other mode freezes nothing; pass `freeze:[]` to train everything.
 
 ## Consequences
 
