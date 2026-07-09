@@ -311,6 +311,76 @@ def test_full_workflow_fresh_restart_initmodel(tmp_path):
         break
 
 
+# ------------------------- hamil_huber loss ----------------------------------
+
+def test_hamil_huber_registered_and_reports_energy_units():
+    # hamil_huber is a registered Loss method, a subclass of HamilLossAbs (inherits masking /
+    # onsite_shift / trace). Its REPORTED value is the energy-unit metric (identical to hamil_abs,
+    # 0.5*(MAE+RMSE), eV); only the gradient is Huber (checked separately).
+    from dptb.nnops.loss import Loss, HamilLossAbs, HamilLossHuber
+    from dptb.data.transforms import OrbitalMapper
+
+    idp = OrbitalMapper({"Si": ["1s", "1p"]}, method="e3tb")
+    lf = Loss(method="hamil_huber", idp=idp, overlap=True, huber_delta=1e-2, dtype=torch.float32, device="cpu")
+    absl = HamilLossAbs(idp=idp, overlap=True, dtype=torch.float32, device="cpu")
+    assert isinstance(lf, HamilLossHuber) and isinstance(lf, HamilLossAbs)
+    assert lf.huber_delta == 1e-2
+
+    # the reported value equals the hamil_abs energy metric (eV) at BOTH large and small residuals,
+    # regardless of delta -> the curve reads in eV and is comparable to a 1e-3 target line.
+    torch.manual_seed(0)
+    for scale in (1.0, 1e-2, 1e-3):
+        pre = torch.zeros(200)
+        tgt = torch.randn(200) * scale
+        assert torch.allclose(lf._elem_loss(pre, tgt), absl._elem_loss(pre, tgt)), scale
+    # and for a constant residual the value IS the error magnitude (energy units): |r|=1e-3 -> 1e-3
+    assert lf._elem_loss(torch.zeros(50), torch.full((50,), 1e-3)).item() == pytest.approx(1e-3, rel=1e-4)
+
+
+def test_hamil_huber_value_energy_but_gradient_is_huber():
+    # straight-through check: value == energy metric, gradient == Huber gradient (NOT the energy one).
+    from dptb.nnops.loss import HamilLossHuber, HamilLossAbs
+    from dptb.data.transforms import OrbitalMapper
+    idp = OrbitalMapper({"Si": ["1s", "1p"]}, method="e3tb")
+    lf = HamilLossHuber(idp=idp, overlap=False, huber_delta=1e-2, dtype=torch.float32, device="cpu")
+    absl = HamilLossAbs(idp=idp, overlap=False, dtype=torch.float32, device="cpu")
+    tgt = torch.full((64,), 1e-4)                        # deep in the L2 regime
+
+    x = torch.zeros(64, requires_grad=True)
+    out = lf._elem_loss(x, tgt)
+    assert out.item() == pytest.approx(1e-4, rel=1e-3)   # reported value = energy error (eV)
+    out.backward()
+    g_huber = x.grad.norm().item()
+
+    x2 = torch.zeros(64, requires_grad=True)
+    absl._elem_loss(x2, tgt).backward()
+    g_energy = x2.grad.norm().item()
+    assert g_huber < 0.1 * g_energy                      # gradient is the vanishing Huber one
+
+
+def test_hamil_huber_gradient_vanishes_at_minimum():
+    # THE point of the Huber loss: near the minimum its gradient -> 0 (so training converges at a
+    # fixed lr), unlike hamil_abs whose L1 half keeps a magnitude-independent gradient (lr-limited
+    # floor -> the slow power-law tail).
+    from dptb.nnops.loss import HamilLossAbs, HamilLossHuber
+    from dptb.data.transforms import OrbitalMapper
+    idp = OrbitalMapper({"Si": ["1s", "1p"]}, method="e3tb")
+
+    def grad_norm(loss, resid):
+        x = torch.zeros(64, requires_grad=True)
+        loss._elem_loss(x, torch.full((64,), resid)).backward()
+        return x.grad.norm().item()
+
+    huber = HamilLossHuber(idp=idp, overlap=False, huber_delta=1e-2, dtype=torch.float32, device="cpu")
+    absl = HamilLossAbs(idp=idp, overlap=False, dtype=torch.float32, device="cpu")
+    # far from the minimum both push comparably (Huber in its L1 regime)
+    assert grad_norm(huber, 1.0) == pytest.approx(grad_norm(absl, 1.0), rel=0.5)
+    # near the minimum the Huber gradient collapses while abs stays O(1)
+    g_huber = grad_norm(huber, 1e-4)
+    g_abs = grad_norm(absl, 1e-4)
+    assert g_huber < 0.05 * g_abs, (g_huber, g_abs)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

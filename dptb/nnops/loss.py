@@ -409,20 +409,20 @@ class EigHamLoss(nn.Module):
                 
         pre = data[AtomicDataDict.NODE_FEATURES_KEY][self.idp.mask_to_nrme[data[AtomicDataDict.ATOM_TYPE_KEY].flatten()]]
         tgt = ref_data[AtomicDataDict.NODE_FEATURES_KEY][self.idp.mask_to_nrme[ref_data[AtomicDataDict.ATOM_TYPE_KEY].flatten()]]
-        onsite_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+        onsite_loss = self._elem_loss(pre, tgt)
 
         pre = data[AtomicDataDict.EDGE_FEATURES_KEY][self.idp.mask_to_erme[data[AtomicDataDict.EDGE_TYPE_KEY].flatten()]]
         tgt = ref_data[AtomicDataDict.EDGE_FEATURES_KEY][self.idp.mask_to_erme[ref_data[AtomicDataDict.EDGE_TYPE_KEY].flatten()]]
-        hopping_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+        hopping_loss = self._elem_loss(pre, tgt)
         
         if self.overlap:
             pre = data[AtomicDataDict.EDGE_OVERLAP_KEY][self.idp.mask_to_erme[data[AtomicDataDict.EDGE_TYPE_KEY].flatten()]]
             tgt = ref_data[AtomicDataDict.EDGE_OVERLAP_KEY][self.idp.mask_to_erme[ref_data[AtomicDataDict.EDGE_TYPE_KEY].flatten()]]
-            overlap_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+            overlap_loss = self._elem_loss(pre, tgt)
 
             pre = data[AtomicDataDict.NODE_OVERLAP_KEY][self.idp.mask_to_nrme[data[AtomicDataDict.ATOM_TYPE_KEY].flatten()]]
             tgt = ref_data[AtomicDataDict.NODE_OVERLAP_KEY][self.idp.mask_to_nrme[ref_data[AtomicDataDict.ATOM_TYPE_KEY].flatten()]]
-            overlap_loss += 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+            overlap_loss += self._elem_loss(pre, tgt)
 
             ham_loss = (1/3) * (hopping_loss + onsite_loss + (self.coeff_ovp / self.coeff_ham) * overlap_loss)
         else:
@@ -495,6 +495,13 @@ class HamilLossAbs(nn.Module):
             n += 1
         return loss / max(n, 1)
 
+    def _elem_loss(self, pre: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
+        """Per-element reduction over the masked reduced-Hamiltonian tensor: 0.5*(MAE + RMSE).
+        Robust L1 + outlier-sensitive L2. NB the L1 half has a magnitude-independent gradient, so
+        near the minimum the achievable loss is set by the learning rate (`hamil_huber` overrides
+        this with a Huber reduction whose gradient vanishes at the minimum)."""
+        return 0.5 * (self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+
     def forward(self, data: AtomicDataDict, ref_data: AtomicDataDict):
         # mask the data
         if self.onsite_shift:
@@ -531,21 +538,21 @@ class HamilLossAbs(nn.Module):
         nmask = self.idp.mask_to_nrme[data[AtomicDataDict.ATOM_TYPE_KEY].flatten()]
         pre = data[AtomicDataDict.NODE_FEATURES_KEY][nmask]
         tgt = ref_data[AtomicDataDict.NODE_FEATURES_KEY][nmask]
-        onsite_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+        onsite_loss = self._elem_loss(pre, tgt)
 
         emask = self.idp.mask_to_erme[data[AtomicDataDict.EDGE_TYPE_KEY].flatten()]
         pre = data[AtomicDataDict.EDGE_FEATURES_KEY][emask]
         tgt = ref_data[AtomicDataDict.EDGE_FEATURES_KEY][emask]
-        hopping_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+        hopping_loss = self._elem_loss(pre, tgt)
 
         if self.overlap:
             pre = data[AtomicDataDict.EDGE_OVERLAP_KEY][emask]
             tgt = ref_data[AtomicDataDict.EDGE_OVERLAP_KEY][emask]
-            overlap_loss = 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+            overlap_loss = self._elem_loss(pre, tgt)
 
             pre = data[AtomicDataDict.NODE_OVERLAP_KEY][nmask]
             tgt = ref_data[AtomicDataDict.NODE_OVERLAP_KEY][nmask]
-            overlap_loss += 0.5*(self.loss1(pre, tgt) + torch.sqrt(self.loss2(pre, tgt)))
+            overlap_loss += self._elem_loss(pre, tgt)
 
             loss_H = (1/3) * (hopping_loss + onsite_loss + overlap_loss)
         else:
@@ -563,6 +570,48 @@ class HamilLossAbs(nn.Module):
                 loss_H = loss_H + mu * loss_T
 
         return loss_H
+
+@Loss.register("hamil_huber")
+class HamilLossHuber(HamilLossAbs):
+    """Masked reduced-Hamiltonian loss identical to `hamil_abs` (same onsite_shift gauge handling,
+    the same onsite/hopping/overlap split, and the optional TraceGrad auxiliary), but the per-element
+    reduction is a Huber (smooth-L1) loss instead of 0.5*(MAE + RMSE).
+
+    Why (MLFF practice, e.g. MACE force loss): the MAE half of `hamil_abs` has a magnitude-independent
+    gradient (sign of the residual), so near the minimum Adam only jitters at a floor set by the
+    learning rate -- training then *anneals along the lr* instead of converging, which is the slow
+    power-law loss tail seen when fitting Hamiltonians below ~1e-3. `nn.SmoothL1Loss(beta=delta)` is
+    L1 for residuals above `delta` (robust to the large onsite/near-hopping channels early) and L2
+    below `delta`, where its gradient (~ residual/delta) vanishes at the minimum -> genuine
+    convergence at fixed lr. It preserves the absolute-error target (uniform, NO per-channel
+    normalization); for residuals >> delta it coincides with the MAE, so the reported value matches
+    `hamil_abs` early and dips below it once it enters the converging (quadratic) regime.
+
+    `huber_delta` (eV) sets the L1<->L2 transition. Recommended two-stage recipe: a coarse stage with
+    a larger delta (e.g. 1e-2) then a fine stage with a smaller one (e.g. 1e-3, lower lr, EMA on,
+    optionally dtype float64).
+
+    UNITS. The *reported* loss value is kept in energy units and is the SAME metric as `hamil_abs`
+    (0.5*(MAE + RMSE), eV) so the curve reads in eV and is directly comparable to hamil_abs plots and
+    to a 1e-3 target line. Only the *gradient* comes from the Huber loss. This is deliberate: a Huber
+    (smooth-L1) value in its L2 regime is 0.5*r^2/delta -- dimensionally eV but numerically NOT the
+    error magnitude (it is delta-scaled and would jump when delta changes between stages), whereas
+    MAE/RMSE are the true energy error but have a non-vanishing gradient (the lr-limited floor). We
+    keep the energy-unit MAE+RMSE for reporting and back-propagate the Huber gradient (which vanishes
+    at the minimum -> converges at fixed lr) via a straight-through estimator.
+    """
+    def __init__(self, huber_delta: float = 1e-2, **kwargs):
+        super().__init__(**kwargs)
+        assert huber_delta > 0, "huber_delta must be positive"
+        self.huber_delta = float(huber_delta)
+        # SmoothL1Loss (Huber/delta): L1 above beta, L2 (vanishing gradient) below beta.
+        self.huber = nn.SmoothL1Loss(beta=self.huber_delta)
+
+    def _elem_loss(self, pre: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
+        huber = self.huber(pre, tgt)
+        energy = super()._elem_loss(pre, tgt)   # 0.5*(MAE + RMSE), units of eV
+        # straight-through: reported value == energy metric (eV), gradient == d(huber)
+        return huber + (energy - huber).detach()
 
 @Loss.register("hamil_blas")
 class HamilLossBlas(nn.Module):

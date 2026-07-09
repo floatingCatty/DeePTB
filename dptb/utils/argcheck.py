@@ -900,8 +900,9 @@ def hopping():
 def loss_options():
     doc_method = """The loss function type, defined by a string like `<fitting target>_<loss type>`, Default: `eigs_l2dsf`. supported loss functions includes:\n\n\
                     - `eigvals`: The mse loss predicted and labeled eigenvalues and Delta eigenvalues between different k.
-                    - `hamil`: 
-                    - `hamil_abs`:
+                    - `hamil`:
+                    - `hamil_abs`: masked reduced-Hamiltonian loss, per-element 0.5*(MAE + RMSE).
+                    - `hamil_huber`: same as `hamil_abs` but a Huber (smooth-L1) per-element reduction (converges at fixed lr instead of annealing along it; see `huber_delta`).
                     - `hamil_blas`:
                 """
     doc_train = "Loss options for training."
@@ -918,6 +919,15 @@ def loss_options():
     wt = [
         Argument("onsite_weight", [int, float, dict], optional=True, default=1., doc="Whether to use onsite shift in loss function. Default: False"),
         Argument("hopping_weight", [int, float, dict], optional=True, default=1., doc="Whether to use onsite shift in loss function. Default: False"),
+    ]
+
+    huber = [
+        Argument("huber_delta", [int, float], optional=True, default=1e-2, doc="The L1<->L2 transition (eV) of the Huber "
+                 "(smooth-L1) GRADIENT used by `hamil_huber`: L1 (robust) for residuals above huber_delta, L2 (converging) "
+                 "below it. Unlike the MAE half of `hamil_abs`, the L2 gradient vanishes at the minimum, so training "
+                 "converges at fixed lr instead of annealing along it. The REPORTED loss value is kept in energy units (the "
+                 "same 0.5*(MAE+RMSE), eV, as `hamil_abs`) via a straight-through estimator, so the curve reads in eV. "
+                 "Two-stage recipe: coarse ~1e-2, fine ~1e-3. Default: 1e-2."),
     ]
 
     eigvals = [
@@ -942,6 +952,7 @@ def loss_options():
         Argument("eigvals", dict, sub_fields=eigvals),
         Argument("skints", dict, sub_fields=skints),
         Argument("hamil_abs", dict, sub_fields=hamil),
+        Argument("hamil_huber", dict, sub_fields=hamil+huber),
         Argument("hamil_blas", dict, sub_fields=hamil),
         Argument("hamil_wt", dict, sub_fields=hamil+wt),
         Argument("eig_ham", dict, sub_fields=hamil+eigvals+eig_ham),
